@@ -6,19 +6,30 @@ struct ChatView: View {
     @State var input: String = ""
     
     var body: some View {
-        ScrollView {
-            Text(engine.text)
-        }
-        HStack {
-            TextField("Text", text: $input)
-            Button {
-                Task {
-                    await engine.send(input)
+        VStack {
+            ScrollView {
+                Text(engine.text)
+                    .multilineTextAlignment(.leading)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: 30,
+                        alignment: .leading
+                    )
+                    .background(.gray)
+            }
+            HStack {
+                TextField("Text", text: $input)
+                Button {
+                    Task {
+                        await engine.send(input)
+                    }
+                } label: {
+                    Text("Send")
                 }
-            } label: {
-                Text("Send")
+                .background(.blue)
             }
         }
+        .frame(maxWidth: .infinity)
         .task {
             do {
                 try engine.initialize()
