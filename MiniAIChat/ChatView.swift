@@ -27,6 +27,7 @@ struct ChatView: View {
                     Text("Send")
                 }
                 .background(.blue)
+                .disabled(!engine.isInitialized)
             }
         }
         .frame(maxWidth: .infinity)

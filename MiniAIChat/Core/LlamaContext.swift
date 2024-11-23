@@ -94,11 +94,11 @@ actor LlamaContext {
     }
 
     func loopCompletion() -> String {
-        var new_token_id: llama_token = 0
+        var newToken: llama_token = 0
 
-        new_token_id = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
+        newToken = llama_sampler_sample(sampling, context, batch.n_tokens - 1)
 
-        if llama_token_is_eog(model, new_token_id) || n_cur == n_len {
+        if llama_token_is_eog(model, newToken) || n_cur == n_len {
             print("\n")
             isGenerating = false
             let new_token_str = String(cString: temporaryInvalidCchars + [0])
@@ -106,25 +106,25 @@ actor LlamaContext {
             return new_token_str
         }
 
-        let new_token_cchars = pieces(from: new_token_id)
-        temporaryInvalidCchars.append(contentsOf: new_token_cchars)
-        let new_token_str: String
+        let newTokenCchars = pieces(from: newToken)
+        temporaryInvalidCchars.append(contentsOf: newTokenCchars)
+        let newTokenString: String
         if let string = String(validatingUTF8: temporaryInvalidCchars + [0]) {
             temporaryInvalidCchars.removeAll()
-            new_token_str = string
+            newTokenString = string
         } else if (0 ..< temporaryInvalidCchars.count).contains(where: {$0 != 0 && String(validatingUTF8: Array(temporaryInvalidCchars.suffix($0)) + [0]) != nil}) {
             // in this case, at least the suffix of the temporary_invalid_cchars can be interpreted as UTF8 string
             let string = String(cString: temporaryInvalidCchars + [0])
             temporaryInvalidCchars.removeAll()
-            new_token_str = string
+            newTokenString = string
         } else {
-            new_token_str = ""
+            newTokenString = ""
         }
-        print(new_token_str)
+        print(newTokenString)
         // tokens_list.append(new_token_id)
 
         llama_batch_clear(&batch)
-        llama_batch_add(&batch, new_token_id, n_cur, [0], true)
+        llama_batch_add(&batch, newToken, n_cur, [0], true)
 
         n_decode += 1
         n_cur    += 1
@@ -133,7 +133,7 @@ actor LlamaContext {
             print("failed to evaluate llama!")
         }
 
-        return new_token_str
+        return newTokenString
     }
     
     func clear() {
@@ -192,7 +192,7 @@ extension LlamaContext {
     }
 }
 
-func llama_batch_add(_ batch: inout llama_batch, _ id: llama_token, _ pos: llama_pos, _ seq_ids: [llama_seq_id], _ logits: Bool) {
+private func llama_batch_add(_ batch: inout llama_batch, _ id: llama_token, _ pos: llama_pos, _ seq_ids: [llama_seq_id], _ logits: Bool) {
     batch.token   [Int(batch.n_tokens)] = id
     batch.pos     [Int(batch.n_tokens)] = pos
     batch.n_seq_id[Int(batch.n_tokens)] = Int32(seq_ids.count)
@@ -204,6 +204,6 @@ func llama_batch_add(_ batch: inout llama_batch, _ id: llama_token, _ pos: llama
     batch.n_tokens += 1
 }
 
-func llama_batch_clear(_ batch: inout llama_batch) {
+private func llama_batch_clear(_ batch: inout llama_batch) {
     batch.n_tokens = 0
 }
