@@ -11,7 +11,7 @@ import SwiftUI
 struct MiniAIChatApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ChatView()
         }
     }
 }

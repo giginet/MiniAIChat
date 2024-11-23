@@ -18,7 +18,7 @@ actor LlamaContext {
     private var n_cur: Int32 = 0
     private var n_decode: Int32 = 0
     
-    private var isGenerating = false
+    private(set) var isGenerating = false
     
     init(modelPath: URL) throws {
         let modelParams = llama_model_default_params()
@@ -89,6 +89,8 @@ actor LlamaContext {
         }
 
         n_cur = batch.n_tokens
+        
+        isGenerating = true
     }
 
     func loopCompletion() -> String {
@@ -132,6 +134,12 @@ actor LlamaContext {
         }
 
         return new_token_str
+    }
+    
+    func clear() {
+        tokens.removeAll()
+        temporaryInvalidCchars.removeAll()
+        llama_kv_cache_clear(context)
     }
     
     deinit {
