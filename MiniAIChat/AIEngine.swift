@@ -16,20 +16,15 @@ final class AIEngine {
             fatalError("Unable to load model")
         }
         
-        llamaContext = try LlamaContext(modelPath: modelPath)
+        llamaContext = try LlamaContext(modelPath: modelPath, bnf: json)
         isInitialized = true
     }
     
     private func generatePrompt(text: String) -> String {
         // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
         """
-Transcript of a dialog, where the User interacts with an Assistant named Bob. Bob is helpful, kind, honest, good at writing, and never fails to answer the User's requests immediately and with precision.
-
-User: Hello, Bob.
-Bob: Hello. How may I help you today?
-User: Please tell me the largest city in Europe.
-Bob: Sure. The largest city in Europe is Moscow, the capital of Russia.
-User: \(text)
+あなたは誠実で優秀な日本人のアシスタントです。
+\(text)
 """
     }
     

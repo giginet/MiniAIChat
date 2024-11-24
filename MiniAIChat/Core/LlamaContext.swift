@@ -52,7 +52,7 @@ final class LlamaContext {
         generatingTask != nil || generatingTask?.isCancelled == false
     }
     
-    convenience init(modelPath: URL) throws {
+    convenience init(modelPath: URL, bnf: String?) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -76,7 +76,7 @@ final class LlamaContext {
             throw Error.failedToInitializeContext
         }
         
-        try self.init(model: model, context: context)
+        try self.init(model: model, context: context, bnf: bnf)
     }
     
     init(model: OpaquePointer, context: OpaquePointer, bnf: String? = nil) throws {
@@ -152,7 +152,7 @@ final class LlamaContext {
                     
 //                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
                     // llama_sampler_accept(self.grammar, newTokenID)
-                    let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: false)
+                    let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: true)
                     accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
                     
                     guard !llama_token_is_eog(self.model, newTokenID) else {
