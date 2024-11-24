@@ -11,6 +11,8 @@ final class LlamaContext {
     @ObservationIgnored private var model: OpaquePointer
     @ObservationIgnored private var context: OpaquePointer
     @ObservationIgnored private var sampling: UnsafeMutablePointer<llama_sampler>
+    @ObservationIgnored private var grammar: UnsafeMutablePointer<llama_sampler>
+    
     private var generatingTask: Task<(), any Swift.Error>?
     
     var isGenerating: Bool {
@@ -52,36 +54,20 @@ final class LlamaContext {
         self.sampling = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(self.sampling, llama_sampler_init_temp(0.8))
         llama_sampler_chain_add(self.sampling, llama_sampler_init_dist(1234))
+        llama_sampler_chain_add(self.sampling, llama_sampler_init_top_p(0.95, 2))
+        llama_sampler_chain_add(self.sampling, llama_sampler_init_min_p(0.05, 2))
         let bnf = #"""
-root   ::= object
-value  ::= object | array | string | number | ("true" | "false" | "null") ws
-
-object ::=
-  "{" ws (
-            string ":" ws value
-    ("," ws string ":" ws value)*
-  )? "}" ws
-
-array  ::=
-  "[" ws (
-            value
-    ("," ws value)*
-  )? "]" ws
-
-string ::=
-  "\"" (
-    [^"\\\x7F\x00-\x1F] |
-    "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}) # escapes
-  )* "\"" ws
-
-number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
-
-# Optional space: by convention, applied in this grammar after literal chars when allowed
-ws ::= | " " | "\n" [ \t]{0,20}
+# A probably incorrect grammar for Japanese
+root        ::= jp-char+ ([ \t\n] jp-char+)*
+jp-char     ::= hiragana | katakana | punctuation | cjk
+hiragana    ::= [ぁ-ゟ]
+katakana    ::= [ァ-ヿ]
+punctuation ::= [、-〾]
+cjk         ::= [一-鿿]
 """#
-        let grammar = llama_sampler_init_grammar(self.model, bnf, "root")
+        grammar = llama_sampler_init_grammar(self.model, bnf, "root")
         print(grammar)
-//        llama_sampler_chain_add(self.sampling, grammar)
+        llama_sampler_chain_add(self.sampling, grammar)
     }
     
     enum GenerationResult {
