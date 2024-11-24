@@ -9,15 +9,16 @@ struct ChatView: View {
         VStack {
             ScrollView {
                 Text(engine.text)
-                    .multilineTextAlignment(.leading)
                     .frame(
                         maxWidth: .infinity,
-                        minHeight: .infinity,
                         alignment: .leading
                     )
+                    .multilineTextAlignment(.leading)
                     .foregroundStyle(Color("chatText"))
                     .background(Color("chatBackground"))
             }
+            .background(Color("chatBackground"))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             HStack {
                 TextField("Text", text: $input)
                 Button {
