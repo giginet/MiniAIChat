@@ -35,29 +35,27 @@ fileprivate struct Sampler {
      }
 }
 
-@Observable
 final class LlamaContext {
-    enum Error: Swift.Error {
+    enum GenerationError: Error {
         case unableToLoadModel(URL)
         case failedToInitializeContext
+        case tokenizeFailed
+        case contextSizeExceeded
+        case decodeError
+        case failedToConvert
+        case couldNotParsePieces(llama_token)
     }
     
-    @ObservationIgnored private var model: OpaquePointer
-    @ObservationIgnored private var context: OpaquePointer
-    @ObservationIgnored private var sampler: Sampler
-    
-    private var generatingTask: Task<(), any Swift.Error>?
-    
-    var isGenerating: Bool {
-        generatingTask != nil || generatingTask?.isCancelled == false
-    }
+    private var model: OpaquePointer
+    private var context: OpaquePointer
+    private var sampler: Sampler
     
     convenience init(modelPath: URL, bnf: String?) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
         guard let model else {
-            throw Error.unableToLoadModel(modelPath)
+            throw GenerationError.unableToLoadModel(modelPath)
         }
         
         let threadCount = 8
@@ -73,7 +71,7 @@ final class LlamaContext {
         
         let context = llama_new_context_with_model(model, contextParams)
         guard let context else {
-            throw Error.failedToInitializeContext
+            throw GenerationError.failedToInitializeContext
         }
         
         try self.init(model: model, context: context, bnf: bnf)
@@ -99,7 +97,7 @@ final class LlamaContext {
         }
         
         guard let chain else {
-            throw Error.failedToInitializeContext
+            throw GenerationError.failedToInitializeContext
         }
         
         sampler = Sampler(
@@ -113,14 +111,7 @@ final class LlamaContext {
         case eog
     }
     
-    enum GenerationError: Swift.Error {
-        case tokenizeFailed
-        case contextSizeExceeded
-        case decodeError
-        case failedToConvert
-    }
-    
-    func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, Swift.Error> {
+    func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, any Error> {
         let tokens = tokenize(prompt, addingBOS: true)
         
         var llamaBatch = llama_batch_init(2048, 0, 1)
@@ -130,16 +121,13 @@ final class LlamaContext {
         var cursor = llamaBatch.n_tokens
         var orphans: Array<CChar> = []
         
-        return AsyncThrowingStream { continuation in
-            continuation.onTermination = { termination in
-                self.abortGeneration()
-            }
-            generatingTask = Task { [weak self] in
+        return AsyncThrowingStream<GenerationResult, any Error> { [weak self] continuation in
+            Task {
                 guard let self else { return }
+                continuation.onTermination = { termination in
+                    self.clear()
+                }
                 while true {
-                    if Task.isCancelled {
-                        continuation.finish()
-                    }
                     let contextCounts = llama_n_ctx(self.context)
                     let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
                     guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
@@ -150,8 +138,6 @@ final class LlamaContext {
                         return continuation.finish(throwing: GenerationError.decodeError)
                     }
                     
-//                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
-                    // llama_sampler_accept(self.grammar, newTokenID)
                     let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: true)
                     accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
                     
@@ -160,8 +146,12 @@ final class LlamaContext {
                         break
                     }
                     
-                    let validPieces = try pieces(from: newTokenID)
-                    
+                    let validPieces: [CChar]
+                    do {
+                        validPieces = try pieces(from: newTokenID)
+                    } catch {
+                        return continuation.finish(throwing: GenerationError.couldNotParsePieces(newTokenID))
+                    }
                     orphans.append(contentsOf: validPieces)
                     
                     let newPiece: GenerationResult
@@ -189,12 +179,6 @@ final class LlamaContext {
         }
     }
     
-    func abortGeneration() {
-        generatingTask?.cancel()
-        generatingTask = nil
-        clear()
-    }
-    
     func clear() {
         llama_kv_cache_clear(context)
     }
@@ -220,7 +204,7 @@ final class LlamaContext {
         }
     }
     
-    private func pieces(from token: llama_token) throws -> [CChar] {
+    private func pieces(from token: llama_token) throws(GenerationError) -> [CChar] {
         let maxTokenCount = 128
         let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenCount)
         pieceBuffer.initialize(repeating: CChar())
