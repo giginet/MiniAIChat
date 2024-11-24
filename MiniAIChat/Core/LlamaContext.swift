@@ -201,9 +201,6 @@ final class LlamaContext {
     
     deinit {
         llama_sampler_free(sampler.chain)
-        if let grammar = sampler.grammar {
-            llama_sampler_free(sampler.grammar)
-        }
 //        llama_batch_free(batch)
         llama_free(context)
         llama_free_model(model)
