@@ -101,12 +101,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         
         var llamaBatch = llama_batch_init(2048, 0, 1)
         
-        llama_batch_clear(&llamaBatch)
-        
-        for (i, token) in tokens.enumerated() {
-            llama_batch_add(&llamaBatch, token, llama_pos(i), [0], false)
-        }
-        llamaBatch.logits[Int(llamaBatch.n_tokens) - 1] = 1 // true
+        initializeBatch(&llamaBatch, tokens: tokens)
         
         var cursor = llamaBatch.n_tokens
         var orphans: Array<CChar> = []
@@ -204,6 +199,15 @@ ws ::= | " " | "\n" [ \t]{0,20}
             throw GenerationError.failedToConvert
         }
         return pieceBuffer.map { $0 }
+    }
+    
+    private func initializeBatch(_ batch: inout llama_batch, tokens: [llama_token]) {
+        llama_batch_clear(&batch)
+        
+        for (i, token) in tokens.enumerated() {
+            llama_batch_add(&batch, token, llama_pos(i), [0], false)
+        }
+        batch.logits[Int(batch.n_tokens) - 1] = 1 // true
     }
 }
 

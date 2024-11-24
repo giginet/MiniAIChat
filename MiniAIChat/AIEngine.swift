@@ -29,35 +29,15 @@ What's the Swift programming language
         
         generationTask = Task {
             for try await result in try llamaContext.generate(for: prompt) {
-                print(result)
                 guard case .piece(let newPiece) = result else {
                     break
                 }
                 await MainActor.run {
-                    print("newPiece: \(newPiece)")
                     self.text += newPiece
                 }
             }
             
             llamaContext.clear()
-        }
-//        Task {
-//            for await n in testAsync() {
-//                print(n)
-//            }
-//        }
-    }
-    
-    func testAsync() -> AsyncStream<Int> {
-        var count: Int = 0
-        return AsyncStream { continuous in
-            Task {
-                while true {
-                    try! await Task.sleep(nanoseconds: 1_000_000_000)
-                    count += 1
-                    continuous.yield(count)
-                }
-            }
         }
     }
 }
