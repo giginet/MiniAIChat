@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 struct ChatView: View {
     private let engine: AIEngine = AIEngine()
-    @State var input: String = "Swiftについて教えて"
+    @State var input: String = "List all US states and their capital cities in JSON format."
     
     var body: some View {
         VStack {

@@ -57,16 +57,42 @@ final class LlamaContext {
         llama_sampler_chain_add(self.sampling, llama_sampler_init_top_p(0.95, 2))
         llama_sampler_chain_add(self.sampling, llama_sampler_init_min_p(0.05, 2))
         let bnf = #"""
-# A probably incorrect grammar for Japanese
-root        ::= jp-char+ ([ \t\n] jp-char+)*
-jp-char     ::= hiragana | katakana | punctuation | cjk
-hiragana    ::= [ぁ-ゟ]
-katakana    ::= [ァ-ヿ]
-punctuation ::= [、-〾]
-cjk         ::= [一-鿿]
+# This is the same as json.gbnf but we restrict whitespaces at the end of the root array
+# Useful for generating JSON arrays
+
+root   ::= arr
+value  ::= object | array | string | number | ("true" | "false" | "null") ws
+
+arr  ::=
+  "[\n" ws (
+            value
+    (",\n" ws value)*
+  )? "]"
+
+object ::=
+  "{" ws (
+            string ":" ws value
+    ("," ws string ":" ws value)*
+  )? "}" ws
+
+array  ::=
+  "[" ws (
+            value
+    ("," ws value)*
+  )? "]" ws
+
+string ::=
+  "\"" (
+    [^"\\\x7F\x00-\x1F] |
+    "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}) # escapes
+  )* "\"" ws
+
+number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [1-9] [0-9]{0,15})? ws
+
+# Optional space: by convention, applied in this grammar after literal chars when allowed
+ws ::= | " " | "\n" [ \t]{0,20}
 """#
         grammar = llama_sampler_init_grammar(self.model, bnf, "root")
-        print(grammar)
         llama_sampler_chain_add(self.sampling, grammar)
     }
     
@@ -112,7 +138,11 @@ cjk         ::= [一-鿿]
                         return continuation.finish(throwing: GenerationError.decodeError)
                     }
                     
-                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
+//                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
+                    // llama_sampler_accept(self.grammar, newTokenID)
+                    let newTokenID = sampling(batch: llamaBatch)
+                    llama_sampler_accept(self.grammar, newTokenID)
+//                    llama_sampler_accept(self.sampling, newTokenID)
                     
                     guard !llama_token_is_eog(self.model, newTokenID) else {
                         continuation.finish()
@@ -202,6 +232,53 @@ cjk         ::= [一-鿿]
             llama_batch_add(&batch, token, llama_pos(i), [0], false)
         }
         batch.logits[Int(batch.n_tokens) - 1] = 1 // true
+    }
+    
+    private func updateLogits(batch: llama_batch, candidates: inout [llama_token_data], cur_p: inout llama_token_data_array) {
+        let n_vocab = llama_n_vocab(model)
+        let logits = llama_get_logits_ith(context, -1)
+        
+        candidates.reserveCapacity(Int(n_vocab))
+
+        for token_id in 0..<n_vocab {
+            candidates.append(llama_token_data(id: token_id, logit: logits![Int(token_id)], p: 0.0))
+        }
+        
+        return candidates.withUnsafeMutableBufferPointer { buffer in
+            cur_p = llama_token_data_array(data: buffer.baseAddress, size: buffer.count, selected: -1, sorted: false)
+        }
+    }
+    
+    private func sampling(batch: llama_batch) -> llama_token {
+        var candidates: [llama_token_data] = []
+        var cur_p: llama_token_data_array = llama_token_data_array()
+
+        updateLogits(batch: batch, candidates: &candidates, cur_p: &cur_p)
+        llama_sampler_apply(self.sampling, &cur_p)
+        
+        let id = cur_p.data[Int(cur_p.selected)].id
+        var single_token_data = llama_token_data(id: id, logit: 1, p: 0)
+        var single_token_data_array = llama_token_data_array(
+            data: withUnsafeMutablePointer(to: &single_token_data) { $0 },
+            size: 1,
+            selected: -1,
+            sorted: false
+        )
+//
+        withUnsafeMutablePointer(to: &single_token_data_array) { p in
+            llama_sampler_apply(self.grammar, p)
+        }
+        let is_valid = cur_p.data[0].logit != -1 * .infinity
+        if is_valid {
+            return id
+        }
+        
+        updateLogits(batch: batch, candidates: &candidates, cur_p: &cur_p)
+        
+        llama_sampler_apply(self.grammar, &cur_p)
+        llama_sampler_apply(self.sampling, &cur_p)
+        assert(cur_p.selected != -1)
+        return cur_p.data[Int(cur_p.selected)].id
     }
 }
 
