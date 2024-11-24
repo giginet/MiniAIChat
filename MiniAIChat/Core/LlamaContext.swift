@@ -2,11 +2,15 @@ import Foundation
 import llama
 
 fileprivate struct Sampler {
-    var grammar: UnsafeMutablePointer<llama_sampler>
+    var grammar: UnsafeMutablePointer<llama_sampler>?
     var chain: UnsafeMutablePointer<llama_sampler>
     
     var cursor: Array<llama_token_data> = []
     var cursorPointer: llama_token_data_array?
+    
+    var isGrammarEnabled: Bool {
+        grammar != nil
+    }
     
     mutating func updateLogits(context: OpaquePointer, index: Int) {
         let logits = llama_get_logits_ith(context, Int32(index))
@@ -75,7 +79,7 @@ final class LlamaContext {
         try self.init(model: model, context: context)
     }
     
-    init(model: OpaquePointer, context: OpaquePointer) throws {
+    init(model: OpaquePointer, context: OpaquePointer, bnf: String? = nil) throws {
         llama_backend_init()
         self.model = model
         self.context = context
@@ -83,48 +87,18 @@ final class LlamaContext {
         let chain = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))
         llama_sampler_chain_add(chain, llama_sampler_init_dist(0xFFFFFFFF))
-//        llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 2))
+        llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 2))
         llama_sampler_chain_add(chain, llama_sampler_init_min_p(0.05, 1))
-        let bnf = #"""
-# This is the same as json.gbnf but we restrict whitespaces at the end of the root array
-# Useful for generating JSON arrays
-
-root   ::= arr
-value  ::= object | array | string | number | ("true" | "false" | "null") ws
-
-arr  ::=
-  "[\n" ws (
-            value
-    (",\n" ws value)*
-  )? "]"
-
-object ::=
-  "{" ws (
-            string ":" ws value
-    ("," ws string ":" ws value)*
-  )? "}" ws
-
-array  ::=
-  "[" ws (
-            value
-    ("," ws value)*
-  )? "]" ws
-
-string ::=
-  "\"" (
-    [^"\\\x7F\x00-\x1F] |
-    "\\" (["\\bfnrt] | "u" [0-9a-fA-F]{4}) # escapes
-  )* "\"" ws
-
-number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [1-9] [0-9]{0,15})? ws
-
-# Optional space: by convention, applied in this grammar after literal chars when allowed
-ws ::= | " " | "\n" [ \t]{0,20}
-"""#
-        let grammar = llama_sampler_init_grammar(self.model, bnf, "root")
-        llama_sampler_chain_add(chain, grammar)
         
-        guard let grammar, let chain else {
+        let grammar: UnsafeMutablePointer<llama_sampler>?
+        if let bnf {
+            grammar = llama_sampler_init_grammar(self.model, bnf, "root")
+            llama_sampler_chain_add(chain, grammar)
+        } else {
+            grammar = nil
+        }
+        
+        guard let chain else {
             throw Error.failedToInitializeContext
         }
         
@@ -227,7 +201,9 @@ ws ::= | " " | "\n" [ \t]{0,20}
     
     deinit {
         llama_sampler_free(sampler.chain)
-        llama_sampler_free(sampler.grammar)
+        if let grammar = sampler.grammar {
+            llama_sampler_free(sampler.grammar)
+        }
 //        llama_batch_free(batch)
         llama_free(context)
         llama_free_model(model)
@@ -279,7 +255,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         assert(sampler.cursorPointer != nil)
         let cursorRawPointer = withUnsafeMutablePointer(to: &sampler.cursorPointer!) { $0 }
         
-        if shouldGrammarFirst {
+        if shouldGrammarFirst && sampler.isGrammarEnabled {
             llama_sampler_apply(sampler.grammar, cursorRawPointer)
         }
         llama_sampler_apply(sampler.chain, cursorRawPointer)
@@ -289,7 +265,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         
         let id = cursorRawPointer.pointee.data[Int(selected)].id
         
-        if (shouldGrammarFirst) {
+        if (shouldGrammarFirst && sampler.isGrammarEnabled) {
             return id
         }
         
@@ -301,8 +277,10 @@ ws ::= | " " | "\n" [ \t]{0,20}
             selected: -1,
             sorted: false
         )
-        withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
-            llama_sampler_apply(self.sampler.grammar, pointer)
+        if sampler.isGrammarEnabled {
+            withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
+                llama_sampler_apply(self.sampler.grammar, pointer)
+            }
         }
         let isValid = cursorRawPointer.pointee.data[0].logit != -1 * .infinity
         if isValid {
@@ -310,18 +288,20 @@ ws ::= | " " | "\n" [ \t]{0,20}
         }
         
         sampler.updateLogits(context: context, index: index)
-        llama_sampler_apply(self.sampler.grammar, cursorRawPointer)
+        if sampler.isGrammarEnabled {
+            llama_sampler_apply(self.sampler.grammar, cursorRawPointer)
+        }
         llama_sampler_apply(self.sampler.chain, cursorRawPointer)
         assert(cursorRawPointer.pointee.selected != -1)
         return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
     }
     
     private func accept(_ sampler: Sampler, to token: llama_token, shouldAcceptGrammar: Bool) {
-        if shouldAcceptGrammar {
+        if shouldAcceptGrammar && sampler.isGrammarEnabled {
             llama_sampler_accept(sampler.grammar, token)
         }
         
-        llama_sampler_accept(sampler.chain, token)
+//        llama_sampler_accept(sampler.chain, token)
     }
 }
 
