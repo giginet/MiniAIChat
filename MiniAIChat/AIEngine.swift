@@ -6,10 +6,9 @@ final class AIEngine {
     private(set) var text: String = ""
     private(set) var isInitialized = false
     @ObservationIgnored private var llamaContext: LlamaContext?
-    private var generationTask: Task<(), any Error>? = nil
     
     var isGenerating: Bool {
-        generationTask != nil
+        llamaContext?.isGenerating ?? false
     }
     
     func initialize() throws {
@@ -41,13 +40,9 @@ final class AIEngine {
         }
         
         llamaContext.clear()
-        
-        generationTask = nil
     }
     
     func abort() {
-        precondition(generationTask != nil)
-        
-        generationTask?.cancel()
+        llamaContext?.abortGeneration()
     }
 }

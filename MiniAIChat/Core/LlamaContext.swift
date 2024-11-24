@@ -1,19 +1,21 @@
 import Foundation
 import llama
 
+@Observable
 final class LlamaContext {
     enum Error: Swift.Error {
         case unableToLoadModel(URL)
         case failedToInitializeContext
     }
     
-    private var model: OpaquePointer
-    private var context: OpaquePointer
-    private var sampling: UnsafeMutablePointer<llama_sampler>
-    private var tokens: [llama_token] = []
-    private var temporaryInvalidCchars: [CChar] = []
+    @ObservationIgnored private var model: OpaquePointer
+    @ObservationIgnored private var context: OpaquePointer
+    @ObservationIgnored private var sampling: UnsafeMutablePointer<llama_sampler>
+    private var generatingTask: Task<(), any Swift.Error>?
     
-    private(set) var isGenerating = false
+    var isGenerating: Bool {
+        generatingTask != nil || generatingTask?.isCancelled == false
+    }
     
     convenience init(modelPath: URL) throws {
         let modelParams = llama_model_default_params()
@@ -105,8 +107,15 @@ ws ::= | " " | "\n" [ \t]{0,20}
         var orphans: Array<CChar> = []
         
         return AsyncThrowingStream<GenerationResult, Swift.Error> { continuation in
-            Task {
+            continuation.onTermination = { termination in
+                self.abortGeneration()
+            }
+            generatingTask = Task { [weak self] in
+                guard let self else { return }
                 while true {
+                    if Task.isCancelled {
+                        continuation.finish()
+                    }
                     let contextCounts = llama_n_ctx(self.context)
                     let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
                     guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
@@ -153,14 +162,13 @@ ws ::= | " " | "\n" [ \t]{0,20}
         }
     }
     
-    func stopGeneration() {
-        isGenerating = false
+    func abortGeneration() {
+        generatingTask?.cancel()
+        generatingTask = nil
         clear()
     }
     
     func clear() {
-        tokens.removeAll()
-        temporaryInvalidCchars.removeAll()
         llama_kv_cache_clear(context)
     }
     

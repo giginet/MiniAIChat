@@ -30,7 +30,7 @@ struct ChatView: View {
                 .disabled(isSendButtonDisabled)
                 Button {
                     Task {
-                        await engine.abort()
+                        engine.abort()
                     }
                 } label: {
                     Text("Abort")
