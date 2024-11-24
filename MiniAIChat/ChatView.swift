@@ -21,13 +21,22 @@ struct ChatView: View {
                 TextField("Text", text: $input)
                 Button {
                     Task {
-                        await engine.send(input)
+                        try await engine.send(input)
                     }
                 } label: {
                     Text("Send")
                 }
                 .background(.blue)
-                .disabled(isDisabled)
+                .disabled(isSendButtonDisabled)
+                Button {
+                    Task {
+                        await engine.abort()
+                    }
+                } label: {
+                    Text("Abort")
+                }
+                .background(.red)
+                .disabled(isAbortButtonDisabled)
             }
         }
         .frame(maxWidth: .infinity)
@@ -41,8 +50,12 @@ struct ChatView: View {
         .padding()
     }
     
-    private var isDisabled: Bool {
+    private var isSendButtonDisabled: Bool {
         !engine.isInitialized || input.isEmpty || engine.isGenerating
+    }
+    
+    private var isAbortButtonDisabled: Bool {
+        !engine.isGenerating
     }
 }
 

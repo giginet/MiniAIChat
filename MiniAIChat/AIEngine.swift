@@ -27,23 +27,27 @@ final class AIEngine {
 """
     }
     
-    func send(_ text: String) async {
+    func send(_ text: String) async throws {
         guard let llamaContext else { return }
         let prompt = generatePrompt(text: text)
         
-        generationTask = Task { [weak self] in
-            for try await result in try llamaContext.generate(for: prompt) {
-                guard case .piece(let newPiece) = result else {
-                    break
-                }
-                await MainActor.run {
-                    self?.text += newPiece
-                }
+        for try await result in try llamaContext.generate(for: prompt) {
+            guard case .piece(let newPiece) = result else {
+                break
             }
-            
-            llamaContext.clear()
-            
-            generationTask = nil
+            await MainActor.run {
+                self.text += newPiece
+            }
         }
+        
+        llamaContext.clear()
+        
+        generationTask = nil
+    }
+    
+    func abort() {
+        precondition(generationTask != nil)
+        
+        generationTask?.cancel()
     }
 }
