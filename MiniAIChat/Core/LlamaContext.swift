@@ -1,6 +1,36 @@
 import Foundation
 import llama
 
+fileprivate struct Sampler {
+    var grammar: UnsafeMutablePointer<llama_sampler>
+    var chain: UnsafeMutablePointer<llama_sampler>
+    
+    var cursor: Array<llama_token_data> = []
+    var cursorPointer: llama_token_data_array?
+    
+    mutating func updateLogits(context: OpaquePointer, index: Int) {
+        let logits = llama_get_logits_ith(context, Int32(index))
+        
+        let numberOfVocabulary = Int(llama_n_vocab(llama_get_model(context)))
+        
+        self.cursor = Array(repeating: llama_token_data(), count: numberOfVocabulary)
+        
+        for tokenID in 0..<numberOfVocabulary {
+            let logit = logits![tokenID]
+            cursor[Int(tokenID)] = llama_token_data(id: Int32(tokenID), logit: logit, p: 0.0)
+        }
+        
+        self.cursorPointer = self.cursor.withUnsafeMutableBufferPointer { buffer in
+            llama_token_data_array(
+                data: buffer.baseAddress,
+                size: buffer.count,
+                selected: -1,
+                sorted: false
+            )
+        }
+     }
+}
+
 @Observable
 final class LlamaContext {
     enum Error: Swift.Error {
@@ -10,8 +40,7 @@ final class LlamaContext {
     
     @ObservationIgnored private var model: OpaquePointer
     @ObservationIgnored private var context: OpaquePointer
-    @ObservationIgnored private var sampling: UnsafeMutablePointer<llama_sampler>
-    @ObservationIgnored private var grammar: UnsafeMutablePointer<llama_sampler>
+    @ObservationIgnored private var sampler: Sampler
     
     private var generatingTask: Task<(), any Swift.Error>?
     
@@ -43,19 +72,19 @@ final class LlamaContext {
             throw Error.failedToInitializeContext
         }
         
-        self.init(model: model, context: context)
+        try self.init(model: model, context: context)
     }
     
-    init(model: OpaquePointer, context: OpaquePointer) {
+    init(model: OpaquePointer, context: OpaquePointer) throws {
         llama_backend_init()
         self.model = model
         self.context = context
         let samplerChainParams = llama_sampler_chain_default_params()
-        self.sampling = llama_sampler_chain_init(samplerChainParams)
-        llama_sampler_chain_add(self.sampling, llama_sampler_init_temp(0.8))
-        llama_sampler_chain_add(self.sampling, llama_sampler_init_dist(1234))
-        llama_sampler_chain_add(self.sampling, llama_sampler_init_top_p(0.95, 2))
-        llama_sampler_chain_add(self.sampling, llama_sampler_init_min_p(0.05, 2))
+        let chain = llama_sampler_chain_init(samplerChainParams)
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))
+        llama_sampler_chain_add(chain, llama_sampler_init_dist(0xFFFFFFFF))
+//        llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 2))
+        llama_sampler_chain_add(chain, llama_sampler_init_min_p(0.05, 1))
         let bnf = #"""
 # This is the same as json.gbnf but we restrict whitespaces at the end of the root array
 # Useful for generating JSON arrays
@@ -92,8 +121,17 @@ number ::= ("-"? ([0-9] | [1-9] [0-9]{0,15})) ("." [0-9]+)? ([eE] [-+]? [1-9] [0
 # Optional space: by convention, applied in this grammar after literal chars when allowed
 ws ::= | " " | "\n" [ \t]{0,20}
 """#
-        grammar = llama_sampler_init_grammar(self.model, bnf, "root")
-        llama_sampler_chain_add(self.sampling, grammar)
+        let grammar = llama_sampler_init_grammar(self.model, bnf, "root")
+        llama_sampler_chain_add(chain, grammar)
+        
+        guard let grammar, let chain else {
+            throw Error.failedToInitializeContext
+        }
+        
+        sampler = Sampler(
+            grammar: grammar,
+            chain: chain
+        )
     }
     
     enum GenerationResult {
@@ -118,7 +156,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         var cursor = llamaBatch.n_tokens
         var orphans: Array<CChar> = []
         
-        return AsyncThrowingStream<GenerationResult, Swift.Error> { continuation in
+        return AsyncThrowingStream { continuation in
             continuation.onTermination = { termination in
                 self.abortGeneration()
             }
@@ -140,9 +178,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                     
 //                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
                     // llama_sampler_accept(self.grammar, newTokenID)
-                    let newTokenID = sampling(batch: llamaBatch)
-                    llama_sampler_accept(self.grammar, newTokenID)
-//                    llama_sampler_accept(self.sampling, newTokenID)
+                    let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: false)
+                    accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
                     
                     guard !llama_token_is_eog(self.model, newTokenID) else {
                         continuation.finish()
@@ -189,7 +226,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
     }
     
     deinit {
-        llama_sampler_free(sampling)
+        llama_sampler_free(sampler.chain)
+        llama_sampler_free(sampler.grammar)
 //        llama_batch_free(batch)
         llama_free(context)
         llama_free_model(model)
@@ -234,51 +272,56 @@ ws ::= | " " | "\n" [ \t]{0,20}
         batch.logits[Int(batch.n_tokens) - 1] = 1 // true
     }
     
-    private func updateLogits(batch: llama_batch, candidates: inout [llama_token_data], cur_p: inout llama_token_data_array) {
-        let n_vocab = llama_n_vocab(model)
-        let logits = llama_get_logits_ith(context, -1)
+    // common_sampler_sample
+    private func sampling(batch: llama_batch, index: Int, shouldGrammarFirst: Bool) -> llama_token {
+        sampler.updateLogits(context: self.context, index: index)
         
-        candidates.reserveCapacity(Int(n_vocab))
-
-        for token_id in 0..<n_vocab {
-            candidates.append(llama_token_data(id: token_id, logit: logits![Int(token_id)], p: 0.0))
+        assert(sampler.cursorPointer != nil)
+        let cursorRawPointer = withUnsafeMutablePointer(to: &sampler.cursorPointer!) { $0 }
+        
+        if shouldGrammarFirst {
+            llama_sampler_apply(sampler.grammar, cursorRawPointer)
+        }
+        llama_sampler_apply(sampler.chain, cursorRawPointer)
+        
+        let selected = sampler.cursorPointer?.selected ?? -1
+        assert(sampler.cursorPointer?.selected != -1)
+        
+        let id = cursorRawPointer.pointee.data[Int(selected)].id
+        
+        if (shouldGrammarFirst) {
+            return id
         }
         
-        return candidates.withUnsafeMutableBufferPointer { buffer in
-            cur_p = llama_token_data_array(data: buffer.baseAddress, size: buffer.count, selected: -1, sorted: false)
-        }
-    }
-    
-    private func sampling(batch: llama_batch) -> llama_token {
-        var candidates: [llama_token_data] = []
-        var cur_p: llama_token_data_array = llama_token_data_array()
-
-        updateLogits(batch: batch, candidates: &candidates, cur_p: &cur_p)
-        llama_sampler_apply(self.sampling, &cur_p)
-        
-        let id = cur_p.data[Int(cur_p.selected)].id
-        var single_token_data = llama_token_data(id: id, logit: 1, p: 0)
-        var single_token_data_array = llama_token_data_array(
-            data: withUnsafeMutablePointer(to: &single_token_data) { $0 },
+        // check if it the sampled token fits the grammar
+        var singleTokenData = llama_token_data(id: id, logit: 1, p: 0)
+        var singleTokenDataArray = llama_token_data_array(
+            data: withUnsafeMutablePointer(to: &singleTokenData) { $0 },
             size: 1,
             selected: -1,
             sorted: false
         )
-//
-        withUnsafeMutablePointer(to: &single_token_data_array) { p in
-            llama_sampler_apply(self.grammar, p)
+        withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
+            llama_sampler_apply(self.sampler.grammar, pointer)
         }
-        let is_valid = cur_p.data[0].logit != -1 * .infinity
-        if is_valid {
+        let isValid = cursorRawPointer.pointee.data[0].logit != -1 * .infinity
+        if isValid {
             return id
         }
         
-        updateLogits(batch: batch, candidates: &candidates, cur_p: &cur_p)
+        sampler.updateLogits(context: context, index: index)
+        llama_sampler_apply(self.sampler.grammar, cursorRawPointer)
+        llama_sampler_apply(self.sampler.chain, cursorRawPointer)
+        assert(cursorRawPointer.pointee.selected != -1)
+        return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
+    }
+    
+    private func accept(_ sampler: Sampler, to token: llama_token, shouldAcceptGrammar: Bool) {
+        if shouldAcceptGrammar {
+            llama_sampler_accept(sampler.grammar, token)
+        }
         
-        llama_sampler_apply(self.grammar, &cur_p)
-        llama_sampler_apply(self.sampling, &cur_p)
-        assert(cur_p.selected != -1)
-        return cur_p.data[Int(cur_p.selected)].id
+        llama_sampler_accept(sampler.chain, token)
     }
 }
 
