@@ -21,7 +21,9 @@ final class AIEngine {
     }
     
     private func generatePrompt(text: String) -> String {
+        // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
         """
+あなたは誠実で優秀な日本人のアシスタントです。
 \(text)
 """
     }
@@ -43,6 +45,11 @@ final class AIEngine {
     }
     
     func abort() {
-        llamaContext?.abortGeneration()
+        do {
+            llamaContext?.abortGeneration()
+            try self.initialize()
+        } catch {
+            print(error)
+        }
     }
 }
