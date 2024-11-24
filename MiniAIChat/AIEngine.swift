@@ -28,7 +28,7 @@ What's the Swift programming language
         let prompt = generatePrompt(text: text)
         
         generationTask = Task {
-            for try await result in llamaContext.generate(for: prompt) {
+            for try await result in try llamaContext.generate(for: prompt) {
                 print(result)
                 guard case .piece(let newPiece) = result else {
                     break

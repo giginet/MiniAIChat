@@ -96,7 +96,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
         case failedToConvert
     }
     
-    func generate(for prompt: String) -> AsyncThrowingStream<GenerationResult, Swift.Error> {
+    func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, Swift.Error> {
 //        let promptSize = Int32(prompt.utf8.count) + 1 + 1
 //        let numberOfPromptTokens = -llama_tokenize(self.model, prompt, Int32(promptSize), nil, 0, true, true)
 //        let promptTokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: Int(numberOfPromptTokens))
@@ -108,10 +108,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
 //        guard tokenizeResult >= 0 else {
 //            throw GenerationError.tokenizeFailed
 //        }
-        
-        for id in tokens {
-            print(String(cString: token_to_piece(token: id) + [0]))
-        }
         
         var llamaBatch = llama_batch_init(2048, 0, 1)
         
@@ -148,18 +144,8 @@ ws ::= | " " | "\n" [ \t]{0,20}
                         break
                     }
                     
-                    //            var pieceBuffer: Array<CChar> = Array.init(repeating: 0, count: 8)
-                    //            let pieceBufferSize = MemoryLayout<Array<CChar>>.size(ofValue: pieceBuffer)
-                    //            let convertedResult = pieceBuffer.withUnsafeMutableBufferPointer { buffer in
-                    //                llama_token_to_piece(self.model, newTokenID, buffer.baseAddress!, Int32(pieceBufferSize), 0, true)
-                    //            }
-                    //
-                    //            guard convertedResult >= 0 else {
-                    //                throw GenerationError.failedToConvert
-                    //            }
-                    let validPieces = token_to_piece(token: newTokenID)
+                    let validPieces = try pieces(from: newTokenID)
                     
-                    //            let validPieces = pieceBuffer.compactMap { $0 }
                     orphans.append(contentsOf: validPieces)
                     
                     let newPiece: GenerationResult
@@ -222,27 +208,18 @@ ws ::= | " " | "\n" [ \t]{0,20}
         return swiftTokens
     }
     
-    private func token_to_piece(token: llama_token) -> [CChar] {
-        let result = UnsafeMutablePointer<Int8>.allocate(capacity: 8)
-        result.initialize(repeating: Int8(0), count: 8)
-        defer {
-            result.deallocate()
-        }
-        let nTokens = llama_token_to_piece(model, token, result, 8, 0, false)
+    private func pieces(from token: llama_token) throws -> [CChar] {
+        let maxTokenSize = 128
+        let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenSize)
+        pieceBuffer.initialize(repeating: CChar())
+        defer { pieceBuffer.deallocate() }
+        
+        let numberOfTokens = llama_token_to_piece(model, token, pieceBuffer.baseAddress!, Int32(maxTokenSize), 0, false)
 
-        if nTokens < 0 {
-            let newResult = UnsafeMutablePointer<Int8>.allocate(capacity: Int(-nTokens))
-            newResult.initialize(repeating: Int8(0), count: Int(-nTokens))
-            defer {
-                newResult.deallocate()
-            }
-            let nNewTokens = llama_token_to_piece(model, token, newResult, -nTokens, 0, false)
-            let bufferPointer = UnsafeBufferPointer(start: newResult, count: Int(nNewTokens))
-            return Array(bufferPointer)
-        } else {
-            let bufferPointer = UnsafeBufferPointer(start: result, count: Int(nTokens))
-            return Array(bufferPointer)
+        guard numberOfTokens >= 0 else {
+            throw GenerationError.failedToConvert
         }
+        return pieceBuffer.map { $0 }
     }
 }
 
