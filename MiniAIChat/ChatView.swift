@@ -3,7 +3,8 @@ import SwiftUI
 @MainActor
 struct ChatView: View {
     private let engine: AIEngine = AIEngine()
-    @State var input: String = "全ての日本の都道府県とその県庁所在地を出力してください。結果はprefectureとcapitalをキーに持つ配列で出力してください。"
+    @Environment(\.configuration) var configuration
+    @State var input: String = ""
     
     var body: some View {
         VStack {
@@ -43,9 +44,12 @@ struct ChatView: View {
             }
         }
         .frame(maxWidth: .infinity)
+        .onAppear {
+            input = configuration.defaultPrompt
+        }
         .task {
             do {
-                try engine.initialize()
+                try engine.initialize(configuration: configuration)
             } catch {
                 print(error)
             }

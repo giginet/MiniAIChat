@@ -12,6 +12,7 @@ struct MiniAIChatApp: App {
     var body: some Scene {
         WindowGroup {
             ChatView()
+                .environment(\.configuration, .default)
         }
     }
 }

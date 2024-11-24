@@ -5,6 +5,7 @@ import Foundation
 final class AIEngine {
     private(set) var text: String = ""
     private(set) var isInitialized = false
+    @ObservationIgnored private var configuration: Configuration?
     @ObservationIgnored private var llamaContext: LlamaContext?
     
     private(set) var generatingTask: Task<Void, Error>?
@@ -13,12 +14,14 @@ final class AIEngine {
         generatingTask != nil
     }
     
-    func initialize() throws {
-        guard let modelPath = Bundle.main.url(forResource: "ELYZA-japanese-Llama-2-7b-instruct-q5_K_M", withExtension: "gguf") else {
+    func initialize(configuration: Configuration) throws {
+        self.configuration = configuration
+        guard let modelPath = Bundle.main.url(forResource: configuration.modelName, withExtension: "gguf") else {
             fatalError("Unable to load model")
         }
         
-        llamaContext = try LlamaContext(modelPath: modelPath, bnf: JSONWithPrefectureGrammar().bnf)
+        let grammar = configuration.grammar
+        llamaContext = try LlamaContext(modelPath: modelPath, bnf: grammar?.bnf)
         isInitialized = true
     }
     
@@ -57,7 +60,8 @@ final class AIEngine {
             generatingTask?.cancel()
             generatingTask = nil
             llamaContext?.clear()
-            try self.initialize()
+            guard let configuration else { fatalError() }
+            try self.initialize(configuration: configuration)
         } catch {
             print(error)
         }
