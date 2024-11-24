@@ -1,7 +1,7 @@
 import Foundation
 import llama
 
-actor LlamaContext {
+final class LlamaContext {
     enum Error: Swift.Error {
         case unableToLoadModel(URL)
         case failedToInitializeContext
@@ -10,17 +10,13 @@ actor LlamaContext {
     private var model: OpaquePointer
     private var context: OpaquePointer
     private var sampling: UnsafeMutablePointer<llama_sampler>
-    private var batch: llama_batch
+//    private var batch: llama_batch
     private var tokens: [llama_token] = []
     private var temporaryInvalidCchars: [CChar] = []
     
-    private var n_len: Int32 = 1024
-    private var n_cur: Int32 = 0
-    private var n_decode: Int32 = 0
-    
     private(set) var isGenerating = false
     
-    init(modelPath: URL) throws {
+    convenience init(modelPath: URL) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -51,7 +47,7 @@ actor LlamaContext {
         llama_backend_init()
         self.model = model
         self.context = context
-        self.batch = llama_batch_init(2048, 0, 1) // TODO configurable
+//        self.batch = llama_batch_init(2048, 0, 1) // TODO configurable
         let samplerChainParams = llama_sampler_chain_default_params()
         self.sampling = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(self.sampling, llama_sampler_init_temp(0.8))
@@ -100,101 +96,95 @@ ws ::= | " " | "\n" [ \t]{0,20}
         case failedToConvert
     }
     
-    func generate(for prompt: String) throws -> GenerationResult {
-        let promptSize = Int32(prompt.count)
-        let numberOfPromptTokens = -llama_tokenize(self.model, prompt, Int32(promptSize), nil, 0, true, true)
-        let promptTokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: Int(numberOfPromptTokens))
-        defer { promptTokens.deallocate() }
+    func generate(for prompt: String) -> AsyncThrowingStream<GenerationResult, Swift.Error> {
+//        let promptSize = Int32(prompt.utf8.count) + 1 + 1
+//        let numberOfPromptTokens = -llama_tokenize(self.model, prompt, Int32(promptSize), nil, 0, true, true)
+//        let promptTokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: Int(numberOfPromptTokens))
+//        defer { promptTokens.deallocate() }
+        let tokens = tokenize(text: prompt, add_bos: true)
         
-        let promptTokensSize: Int32 = Int32(MemoryLayout<llama_token>.size) * numberOfPromptTokens
-        let tokenizeResult = llama_tokenize(self.model, prompt, promptSize, promptTokens.baseAddress, promptTokensSize, true, true)
-        guard tokenizeResult >= 0 else {
-            throw GenerationError.tokenizeFailed
+//        let promptTokensSize: Int32 = Int32(MemoryLayout<llama_token>.size) * numberOfPromptTokens
+//        let tokenizeResult = llama_tokenize(self.model, prompt, promptSize, promptTokens.baseAddress, promptTokensSize, true, true)
+//        guard tokenizeResult >= 0 else {
+//            throw GenerationError.tokenizeFailed
+//        }
+        
+        for id in tokens {
+            print(String(cString: token_to_piece(token: id) + [0]))
         }
         
-        let llamaBatch = llama_batch_get_one(
-            promptTokens.baseAddress,
-            numberOfPromptTokens
-        )
+        var llamaBatch = llama_batch_init(2048, 0, 1)
         
-        while true {
-            let contextCounts = llama_n_ctx(self.context)
-            let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
-            guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
-                throw GenerationError.contextSizeExceeded
-            }
-            
-            guard llama_decode(self.context, llamaBatch) >= 0 else {
-                throw GenerationError.decodeError
-            }
-            
-            let newTokenID = llama_sampler_sample(self.sampling, self.context, -1)
-            
-            guard !llama_token_is_eog(self.model, newTokenID) else {
-                return .eog
-            }
-            
-            var pieceBuffer: Array<Int8> = Array.init(repeating: 0, count: 8)
-            let pieceBufferSize = MemoryLayout<Array<Int8>>.size(ofValue: pieceBuffer)
-            let convetedResult = pieceBuffer.withUnsafeMutableBufferPointer { buffer in
-                llama_token_to_piece(self.model, newTokenID, buffer.baseAddress!, Int32(pieceBufferSize), 0, true)
-            }
-            guard convetedResult >= 0, let piece = String(cString: pieceBuffer, encoding: .utf8) else {
-                throw GenerationError.failedToConvert
-            }
-            return .piece(piece)
+        llama_batch_clear(&llamaBatch)
+        
+        for (i, token) in tokens.enumerated() {
+            llama_batch_add(&llamaBatch, token, llama_pos(i), [0], false)
         }
-        
-        return .eog
-    }
-
-    func loopCompletion() -> String {
-        llama_tokenize(self.model, "", Int32("".count), nil, 0, true, true)
+        llamaBatch.logits[Int(llamaBatch.n_tokens) - 1] = 1 // true
         
         
+//        defer { llama_batch_free(llamaBatch) }
         
-        var newToken: llama_token = 0
-
-        newToken = llama_sampler_sample(sampling, context, -1)
+        var cursor = llamaBatch.n_tokens
+        var orphans: Array<CChar> = []
         
-        llama_sampler_accept(self.sampling, newToken)
-
-        if llama_token_is_eog(model, newToken) || n_cur == n_len {
-            print("\n")
-            isGenerating = false
-            let new_token_str = String(cString: temporaryInvalidCchars + [0])
-            temporaryInvalidCchars.removeAll()
-            return new_token_str
+        return AsyncThrowingStream<GenerationResult, Swift.Error> { continuation in
+            Task {
+                while true {
+                    let contextCounts = llama_n_ctx(self.context)
+                    let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
+                    guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
+                        return continuation.finish(throwing: GenerationError.contextSizeExceeded)
+                    }
+                    
+                    guard llama_decode(self.context, llamaBatch) >= 0 else {
+                        return continuation.finish(throwing: GenerationError.decodeError)
+                    }
+                    
+                    let newTokenID = llama_sampler_sample(self.sampling, self.context, llamaBatch.n_tokens - 1)
+                    
+                    guard !llama_token_is_eog(self.model, newTokenID) else {
+                        continuation.finish()
+                        break
+                    }
+                    
+                    //            var pieceBuffer: Array<CChar> = Array.init(repeating: 0, count: 8)
+                    //            let pieceBufferSize = MemoryLayout<Array<CChar>>.size(ofValue: pieceBuffer)
+                    //            let convertedResult = pieceBuffer.withUnsafeMutableBufferPointer { buffer in
+                    //                llama_token_to_piece(self.model, newTokenID, buffer.baseAddress!, Int32(pieceBufferSize), 0, true)
+                    //            }
+                    //
+                    //            guard convertedResult >= 0 else {
+                    //                throw GenerationError.failedToConvert
+                    //            }
+                    let validPieces = token_to_piece(token: newTokenID)
+                    
+                    //            let validPieces = pieceBuffer.compactMap { $0 }
+                    orphans.append(contentsOf: validPieces)
+                    
+                    let newPiece: GenerationResult
+                    if let validString = String(validating: orphans + [0], as: UTF8.self) {
+                        orphans.removeAll()
+                        newPiece = .piece(validString)
+                    } else if (0 ..< orphans.count).contains(where: {
+                        $0 != 0 && String(validating: Array(orphans.suffix($0)) + [0], as: UTF8.self) != nil
+                    }) {
+                        let string = String(cString: orphans + [0])
+                        orphans.removeAll()
+                        newPiece = .piece(string)
+                    } else {
+                        newPiece = .piece("")
+                    }
+                    
+                    llama_batch_clear(&llamaBatch)
+                    llama_batch_add(&llamaBatch, newTokenID, cursor, [0], true)
+                    
+                    cursor += 1
+                    
+                    continuation.yield(newPiece)
+                }
+            }
         }
-
-        let newTokenCchars = pieces(from: newToken)
-        temporaryInvalidCchars.append(contentsOf: newTokenCchars)
-        let newTokenString: String
-        if let string = String(validatingUTF8: temporaryInvalidCchars + [0]) {
-            temporaryInvalidCchars.removeAll()
-            newTokenString = string
-        } else if (0 ..< temporaryInvalidCchars.count).contains(where: {$0 != 0 && String(validatingUTF8: Array(temporaryInvalidCchars.suffix($0)) + [0]) != nil}) {
-            // in this case, at least the suffix of the temporary_invalid_cchars can be interpreted as UTF8 string
-            let string = String(cString: temporaryInvalidCchars + [0])
-            temporaryInvalidCchars.removeAll()
-            newTokenString = string
-        } else {
-            newTokenString = ""
-        }
-        print(newTokenString)
-        // tokens_list.append(new_token_id)
-
-        llama_batch_clear(&batch)
-        llama_batch_add(&batch, newToken, n_cur, [0], true)
-
-        n_decode += 1
-        n_cur    += 1
-
-        if llama_decode(context, batch) != 0 {
-            print("failed to evaluate llama!")
-        }
-
-        return newTokenString
     }
     
     func stopGeneration() {
@@ -210,26 +200,29 @@ ws ::= | " " | "\n" [ \t]{0,20}
     
     deinit {
         llama_sampler_free(sampling)
-        llama_batch_free(batch)
+//        llama_batch_free(batch)
         llama_free(context)
         llama_free_model(model)
         llama_backend_free()
     }
-}
-
-extension LlamaContext {
-    fileprivate func tokenize(text: String, addSpecialToken: Bool) -> [llama_token] {
+    
+    private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
         let utf8Count = text.utf8.count
-        let numberOfTokens = utf8Count + (addSpecialToken ? 1 : 0) + 1
-        let tokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: numberOfTokens)
-        defer { tokens.deallocate() }
-        
-        let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens.baseAddress, Int32(numberOfTokens), addSpecialToken, false)
-        
-        return tokens.compactMap { $0 }
+        let n_tokens = utf8Count + (add_bos ? 1 : 0) + 1
+        let tokens = UnsafeMutablePointer<llama_token>.allocate(capacity: n_tokens)
+        let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, false)
+
+        var swiftTokens: [llama_token] = []
+        for i in 0..<tokenCount {
+            swiftTokens.append(tokens[Int(i)])
+        }
+
+        tokens.deallocate()
+
+        return swiftTokens
     }
     
-    private func pieces(from token: llama_token) -> [CChar] {
+    private func token_to_piece(token: llama_token) -> [CChar] {
         let result = UnsafeMutablePointer<Int8>.allocate(capacity: 8)
         result.initialize(repeating: Int8(0), count: 8)
         defer {
