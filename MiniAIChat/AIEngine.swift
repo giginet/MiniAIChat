@@ -8,6 +8,10 @@ final class AIEngine {
     @ObservationIgnored private var llamaContext: LlamaContext?
     private var generationTask: Task<(), any Error>? = nil
     
+    var isGenerating: Bool {
+        generationTask != nil
+    }
+    
     func initialize() throws {
         guard let modelPath = Bundle.main.url(forResource: "ELYZA-japanese-Llama-2-7b-instruct-q5_K_M", withExtension: "gguf") else {
             fatalError("Unable to load model")
@@ -27,17 +31,19 @@ final class AIEngine {
         guard let llamaContext else { return }
         let prompt = generatePrompt(text: text)
         
-        generationTask = Task {
+        generationTask = Task { [weak self] in
             for try await result in try llamaContext.generate(for: prompt) {
                 guard case .piece(let newPiece) = result else {
                     break
                 }
                 await MainActor.run {
-                    self.text += newPiece
+                    self?.text += newPiece
                 }
             }
             
             llamaContext.clear()
+            
+            generationTask = nil
         }
     }
 }

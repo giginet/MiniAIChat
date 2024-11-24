@@ -27,7 +27,7 @@ struct ChatView: View {
                     Text("Send")
                 }
                 .background(.blue)
-                .disabled(!engine.isInitialized || input.isEmpty)
+                .disabled(isDisabled)
             }
         }
         .frame(maxWidth: .infinity)
@@ -39,6 +39,10 @@ struct ChatView: View {
             }
         }
         .padding()
+    }
+    
+    private var isDisabled: Bool {
+        !engine.isInitialized || input.isEmpty || engine.isGenerating
     }
 }
 
