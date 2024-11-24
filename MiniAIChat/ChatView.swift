@@ -12,10 +12,11 @@ struct ChatView: View {
                     .multilineTextAlignment(.leading)
                     .frame(
                         maxWidth: .infinity,
-                        minHeight: 30,
+                        minHeight: .infinity,
                         alignment: .leading
                     )
-                    .background(.gray)
+                    .foregroundStyle(Color("chatText"))
+                    .background(Color("chatBackground"))
             }
             HStack {
                 TextField("Text", text: $input)
