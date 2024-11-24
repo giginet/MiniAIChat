@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 struct ChatView: View {
     private let engine: AIEngine = AIEngine()
-    @State var input: String = "Write C++ code to print 'Hello World!'"
+    @State var input: String = "Swiftについて教えて"
     
     var body: some View {
         VStack {

@@ -9,7 +9,7 @@ final class AIEngine {
     private var generationTask: Task<(), any Error>? = nil
     
     func initialize() throws {
-        guard let modelPath = Bundle.main.url(forResource: "codellama-13b-instruct.Q5_K_M", withExtension: "gguf") else {
+        guard let modelPath = Bundle.main.url(forResource: "ELYZA-japanese-Llama-2-7b-instruct-q5_K_M", withExtension: "gguf") else {
             fatalError("Unable to load model")
         }
         
@@ -19,7 +19,7 @@ final class AIEngine {
     
     private func generatePrompt(text: String) -> String {
         """
-What's the Swift programming language
+\(text)
 """
     }
     

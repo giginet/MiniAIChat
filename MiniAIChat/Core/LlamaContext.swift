@@ -10,7 +10,6 @@ final class LlamaContext {
     private var model: OpaquePointer
     private var context: OpaquePointer
     private var sampling: UnsafeMutablePointer<llama_sampler>
-//    private var batch: llama_batch
     private var tokens: [llama_token] = []
     private var temporaryInvalidCchars: [CChar] = []
     
@@ -47,7 +46,6 @@ final class LlamaContext {
         llama_backend_init()
         self.model = model
         self.context = context
-//        self.batch = llama_batch_init(2048, 0, 1) // TODO configurable
         let samplerChainParams = llama_sampler_chain_default_params()
         self.sampling = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(self.sampling, llama_sampler_init_temp(0.8))
@@ -188,17 +186,19 @@ ws ::= | " " | "\n" [ \t]{0,20}
     }
     
     private func pieces(from token: llama_token) throws -> [CChar] {
-        let maxTokenSize = 128
-        let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenSize)
+        let maxTokenCount = 128
+        let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenCount)
         pieceBuffer.initialize(repeating: CChar())
         defer { pieceBuffer.deallocate() }
         
-        let numberOfTokens = llama_token_to_piece(model, token, pieceBuffer.baseAddress!, Int32(maxTokenSize), 0, false)
-
+        let numberOfTokens = llama_token_to_piece(model, token, pieceBuffer.baseAddress!, Int32(maxTokenCount), 0, false)
+        
         guard numberOfTokens >= 0 else {
-            throw GenerationError.failedToConvert
+            throw GenerationError.tokenizeFailed
         }
-        return pieceBuffer.map { $0 }
+        
+        let bufferPointer = UnsafeBufferPointer(start: pieceBuffer.baseAddress, count: Int(numberOfTokens))
+        return Array(bufferPointer)
     }
     
     private func initializeBatch(_ batch: inout llama_batch, tokens: [llama_token]) {
