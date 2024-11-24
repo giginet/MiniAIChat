@@ -41,3 +41,45 @@ katakana    ::= [ァ-ヿ]
 punctuation ::= [、-〾]
 cjk         ::= [一-鿿]
 """#
+
+let prefecturesJSON = ##"""
+root ::= "[" ws01 (root-items (ws01 "," ws01 root-items)*)? ws01 "]" ws01
+root-items ::= "{" ws01 root-items-prefecture "," ws01 root-items-capital "}"
+root-items-prefecture ::= "\"prefecture\"" ":" ws01 string
+root-items-capital ::= "\"capital\"" ":" ws01 string
+
+
+value  ::= (object | array | string | number | boolean | null) ws
+
+object ::=
+  "{" ws (
+    string ":" ws value
+    ("," ws string ":" ws value)*
+  )? "}"
+
+array  ::=
+  "[" ws01 (
+            value
+    ("," ws01 value)*
+  )? "]"
+
+string ::=
+  "\"" (string-char)* "\""
+
+string-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) | jp-char # escapes
+
+number ::= integer ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
+integer ::= "-"? ([0-9] | [1-9] [0-9]*)
+boolean ::= "true" | "false"
+null ::= "null"
+
+# Optional space: by convention, applied in this grammar after literal chars when allowed
+ws ::= ([ \t\n] ws)?
+ws01 ::= ([ \t\n])?
+
+jp-char     ::= hiragana | katakana | punctuation | cjk
+hiragana    ::= [ぁ-ゟ]
+katakana    ::= [ァ-ヿ]
+punctuation ::= [、-〾]
+cjk         ::= [一-鿿]
+"""##

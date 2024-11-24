@@ -16,7 +16,7 @@ final class AIEngine {
             fatalError("Unable to load model")
         }
         
-        llamaContext = try LlamaContext(modelPath: modelPath, bnf: json)
+        llamaContext = try LlamaContext(modelPath: modelPath, bnf: prefecturesJSON)
         isInitialized = true
     }
     

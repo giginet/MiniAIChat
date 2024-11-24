@@ -85,7 +85,7 @@ final class LlamaContext {
         self.context = context
         let samplerChainParams = llama_sampler_chain_default_params()
         let chain = llama_sampler_chain_init(samplerChainParams)
-        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.8))
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.3))
         llama_sampler_chain_add(chain, llama_sampler_init_dist(0xFFFFFFFF))
         llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 2))
         llama_sampler_chain_add(chain, llama_sampler_init_min_p(0.05, 1))

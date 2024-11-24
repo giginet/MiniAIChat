@@ -3,7 +3,7 @@ import SwiftUI
 @MainActor
 struct ChatView: View {
     private let engine: AIEngine = AIEngine()
-    @State var input: String = "全ての日本の都道府県とその県庁所在地を出力してください"
+    @State var input: String = "全ての日本の都道府県とその県庁所在地を出力してください。結果はprefectureとcapitalをキーに持つ配列で出力してください。"
     
     var body: some View {
         VStack {
@@ -16,6 +16,7 @@ struct ChatView: View {
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(Color("chatText"))
                     .background(Color("chatBackground"))
+                    .textSelection(.enabled)
             }
             .background(Color("chatBackground"))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
