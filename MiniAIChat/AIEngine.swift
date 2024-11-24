@@ -24,6 +24,8 @@ final class AIEngine {
         // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
         """
 あなたは誠実で優秀な日本人のアシスタントです。
+出力は全てJSONで出力してください。
+
 \(text)
 """
     }
