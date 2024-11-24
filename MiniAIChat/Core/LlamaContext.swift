@@ -97,17 +97,7 @@ ws ::= | " " | "\n" [ \t]{0,20}
     }
     
     func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, Swift.Error> {
-//        let promptSize = Int32(prompt.utf8.count) + 1 + 1
-//        let numberOfPromptTokens = -llama_tokenize(self.model, prompt, Int32(promptSize), nil, 0, true, true)
-//        let promptTokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: Int(numberOfPromptTokens))
-//        defer { promptTokens.deallocate() }
-        let tokens = tokenize(text: prompt, add_bos: true)
-        
-//        let promptTokensSize: Int32 = Int32(MemoryLayout<llama_token>.size) * numberOfPromptTokens
-//        let tokenizeResult = llama_tokenize(self.model, prompt, promptSize, promptTokens.baseAddress, promptTokensSize, true, true)
-//        guard tokenizeResult >= 0 else {
-//            throw GenerationError.tokenizeFailed
-//        }
+        let tokens = tokenize(prompt, addingBOS: true)
         
         var llamaBatch = llama_batch_init(2048, 0, 1)
         
@@ -117,9 +107,6 @@ ws ::= | " " | "\n" [ \t]{0,20}
             llama_batch_add(&llamaBatch, token, llama_pos(i), [0], false)
         }
         llamaBatch.logits[Int(llamaBatch.n_tokens) - 1] = 1 // true
-        
-        
-//        defer { llama_batch_free(llamaBatch) }
         
         var cursor = llamaBatch.n_tokens
         var orphans: Array<CChar> = []
@@ -192,20 +179,17 @@ ws ::= | " " | "\n" [ \t]{0,20}
         llama_backend_free()
     }
     
-    private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
+    private func tokenize(_ text: String, addingBOS: Bool) -> [llama_token] {
         let utf8Count = text.utf8.count
-        let n_tokens = utf8Count + (add_bos ? 1 : 0) + 1
-        let tokens = UnsafeMutablePointer<llama_token>.allocate(capacity: n_tokens)
-        let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, false)
+        let numberOfTokens = utf8Count + (addingBOS ? 1 : 0) + 1
+        let tokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: numberOfTokens)
+        tokens.initialize(repeating: llama_token())
+        defer { tokens.deallocate() }
+        let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens.baseAddress!, Int32(numberOfTokens), addingBOS, false)
 
-        var swiftTokens: [llama_token] = []
-        for i in 0..<tokenCount {
-            swiftTokens.append(tokens[Int(i)])
+        return (0..<tokenCount).map { i in
+            tokens[Int(i)]
         }
-
-        tokens.deallocate()
-
-        return swiftTokens
     }
     
     private func pieces(from token: llama_token) throws -> [CChar] {
