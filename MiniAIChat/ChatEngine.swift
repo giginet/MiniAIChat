@@ -34,11 +34,11 @@ final class ChatEngine {
         guard let llamaContext else { return }
         let prompt = generatePrompt(text: text)
         
-        llamaContext.startGenerating(for: prompt)
+        await llamaContext.startGenerating(for: prompt)
         
         generatingTask = Task {
-            let generationStream = try llamaContext.generate()
-            for try await result in generationStream {
+            while await llamaContext.isGenerating {
+                let result = try await llamaContext.generate()
                 guard case .piece(let newPiece) = result else {
                     break
                 }
@@ -47,15 +47,15 @@ final class ChatEngine {
                 }
             }
             
-            llamaContext.clear()
+            await llamaContext.clear()
         }
     }
     
-    func abort() {
+    func abort() async {
         do {
             generatingTask?.cancel()
             generatingTask = nil
-            llamaContext?.clear()
+            await llamaContext?.clear()
             guard let configuration else { fatalError() }
             try self.initialize(configuration: configuration)
         } catch {
@@ -63,8 +63,8 @@ final class ChatEngine {
         }
     }
     
-    func reset() {
-        self.abort()
+    func reset() async {
+        await self.abort()
         text = ""
     }
 }

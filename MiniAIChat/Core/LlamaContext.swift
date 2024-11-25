@@ -35,7 +35,7 @@ fileprivate struct Sampler {
      }
 }
 
-final class LlamaContext {
+actor LlamaContext {
     enum GenerationError: Error {
         case unableToLoadModel(URL)
         case failedToInitializeContext
@@ -69,7 +69,7 @@ final class LlamaContext {
     
     private var llamaBatch: llama_batch
     
-    convenience init(modelPath: URL, params: Params) throws {
+    init(modelPath: URL, params: Params) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -139,64 +139,53 @@ final class LlamaContext {
         isGenerating = true
     }
     
-    func generate() throws -> AsyncThrowingStream<GenerationResult, any Error> {
-        return AsyncThrowingStream<GenerationResult, any Error> { [weak self] continuation in
-            Task {
-                guard let self else { return }
-                continuation.onTermination = { termination in
-                    self.clear()
-                }
-                while true {
-                    let contextCounts = llama_n_ctx(self.context)
-                    let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
-                    guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
-                        return continuation.finish(throwing: GenerationError.contextSizeExceeded)
-                    }
-                    
-                    guard llama_decode(self.context, llamaBatch) >= 0 else {
-                        return continuation.finish(throwing: GenerationError.decodeError)
-                    }
-                    
-                    let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: true)
-                    accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
-                    
-                    guard !llama_token_is_eog(self.model, newTokenID) else {
-                        isGenerating = false
-                        continuation.finish()
-                        break
-                    }
-                    
-                    let validPieces: [CChar]
-                    do {
-                        validPieces = try pieces(from: newTokenID)
-                    } catch {
-                        return continuation.finish(throwing: GenerationError.couldNotParsePieces(newTokenID))
-                    }
-                    orphans.append(contentsOf: validPieces)
-                    
-                    let newPiece: GenerationResult
-                    if let validString = String(validating: orphans + [0], as: UTF8.self) {
-                        orphans.removeAll()
-                        newPiece = .piece(validString)
-                    } else if (0 ..< orphans.count).contains(where: {
-                        $0 != 0 && String(validating: Array(orphans.suffix($0)) + [0], as: UTF8.self) != nil
-                    }) {
-                        let string = String(cString: orphans + [0])
-                        orphans.removeAll()
-                        newPiece = .piece(string)
-                    } else {
-                        newPiece = .piece("")
-                    }
-                    
-                    llama_batch_clear(&llamaBatch)
-                    llama_batch_add(&llamaBatch, newTokenID, numberOfCursors, [0], true)
-                    
-                    numberOfCursors += 1
-                    
-                    continuation.yield(newPiece)
-                }
-            }
+    func generate() throws -> GenerationResult {
+        let contextCounts = llama_n_ctx(self.context)
+        let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
+        guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
+            throw GenerationError.contextSizeExceeded
         }
+        
+        guard llama_decode(self.context, llamaBatch) >= 0 else {
+            throw GenerationError.decodeError
+        }
+        
+        let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: true)
+        accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
+        
+        guard !llama_token_is_eog(self.model, newTokenID) else {
+            isGenerating = false
+            return .eog
+        }
+        
+        let validPieces: [CChar]
+        do {
+            validPieces = try pieces(from: newTokenID)
+        } catch {
+            throw GenerationError.couldNotParsePieces(newTokenID)
+        }
+        orphans.append(contentsOf: validPieces)
+        
+        let newPiece: GenerationResult
+        if let validString = String(validating: orphans + [0], as: UTF8.self) {
+            orphans.removeAll()
+            newPiece = .piece(validString)
+        } else if (0 ..< orphans.count).contains(where: {
+            $0 != 0 && String(validating: Array(orphans.suffix($0)) + [0], as: UTF8.self) != nil
+        }) {
+            let string = String(cString: orphans + [0])
+            orphans.removeAll()
+            newPiece = .piece(string)
+        } else {
+            newPiece = .piece("")
+        }
+        
+        llama_batch_clear(&llamaBatch)
+        llama_batch_add(&llamaBatch, newTokenID, numberOfCursors, [0], true)
+        
+        numberOfCursors += 1
+        
+        return newPiece
     }
     
     func clear() {
