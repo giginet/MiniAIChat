@@ -62,6 +62,11 @@ final class LlamaContext {
     private var context: OpaquePointer
     private var sampler: Sampler
     
+    private(set) var isGenerating = false
+    private var numberOfCursors: Int32 = 0
+    private var orphans: Array<CChar> = []
+    
+    
     private var llamaBatch: llama_batch
     
     convenience init(modelPath: URL, params: Params) throws {
@@ -130,8 +135,7 @@ final class LlamaContext {
         
         initializeBatch(&llamaBatch, tokens: tokens)
         
-        var cursor = llamaBatch.n_tokens
-        var orphans: Array<CChar> = []
+        numberOfCursors = llamaBatch.n_tokens
         
         return AsyncThrowingStream<GenerationResult, any Error> { [weak self] continuation in
             Task {
@@ -181,9 +185,9 @@ final class LlamaContext {
                     }
                     
                     llama_batch_clear(&llamaBatch)
-                    llama_batch_add(&llamaBatch, newTokenID, cursor, [0], true)
+                    llama_batch_add(&llamaBatch, newTokenID, numberOfCursors, [0], true)
                     
-                    cursor += 1
+                    numberOfCursors += 1
                     
                     continuation.yield(newPiece)
                 }
