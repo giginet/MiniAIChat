@@ -21,18 +21,14 @@ final class AIEngine {
         }
         
         let grammar = configuration.grammar
-        llamaContext = try LlamaContext(modelPath: modelPath, bnf: grammar?.bnf)
+        llamaContext = try LlamaContext(modelPath: modelPath, params: .init(bnf: grammar?.bnf))
         isInitialized = true
     }
     
     private func generatePrompt(text: String) -> String {
         // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
-        """
-あなたは誠実で優秀な日本人のアシスタントです。
-出力は全てJSONで出力してください。
-
-\(text)
-"""
+        assert(configuration != nil)
+        return configuration?.promptGenerator(text) ?? text
     }
     
     func send(_ text: String) async throws {

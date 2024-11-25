@@ -46,11 +46,23 @@ final class LlamaContext {
         case couldNotParsePieces(llama_token)
     }
     
+    struct Params {
+        var bnf: String?
+        var threadCount = 8
+        var numberOfContext = 2048
+        var numberOfBatch = 1024
+        var tempature = 0.3
+        
+        static var `default`: Params {
+            Params()
+        }
+    }
+    
     private var model: OpaquePointer
     private var context: OpaquePointer
     private var sampler: Sampler
     
-    convenience init(modelPath: URL, bnf: String?) throws {
+    convenience init(modelPath: URL, params: Params) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -58,15 +70,15 @@ final class LlamaContext {
             throw GenerationError.unableToLoadModel(modelPath)
         }
         
-        let threadCount = 8
+        let threadCount = params.threadCount
         
         let contextParams = {
-            var params = llama_context_default_params()
-            params.n_ctx = 2048
-            params.n_threads = Int32(threadCount)
-            params.n_threads_batch = Int32(threadCount)
-            params.n_batch = 1024
-            return params
+            var contextParams = llama_context_default_params()
+            contextParams.n_ctx = UInt32(params.numberOfContext)
+            contextParams.n_threads = Int32(threadCount)
+            contextParams.n_threads_batch = Int32(threadCount)
+            contextParams.n_batch = UInt32(params.numberOfBatch)
+            return contextParams
         }()
         
         let context = llama_new_context_with_model(model, contextParams)
@@ -74,10 +86,10 @@ final class LlamaContext {
             throw GenerationError.failedToInitializeContext
         }
         
-        try self.init(model: model, context: context, bnf: bnf)
+        try self.init(model: model, context: context, params: params)
     }
     
-    init(model: OpaquePointer, context: OpaquePointer, bnf: String? = nil) throws {
+    init(model: OpaquePointer, context: OpaquePointer, params: Params) throws {
         llama_backend_init()
         self.model = model
         self.context = context
@@ -89,7 +101,7 @@ final class LlamaContext {
         llama_sampler_chain_add(chain, llama_sampler_init_min_p(0.05, 1))
         
         let grammar: UnsafeMutablePointer<llama_sampler>?
-        if let bnf {
+        if let bnf = params.bnf {
             grammar = llama_sampler_init_grammar(self.model, bnf, "root")
             llama_sampler_chain_add(chain, grammar)
         } else {
