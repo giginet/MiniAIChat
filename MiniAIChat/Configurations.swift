@@ -18,9 +18,9 @@ extension Configuration {
         // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
         """
         あなたは誠実で優秀な日本人のアシスタントです。特に指示が無い場合は、次の質問に常に日本語で回答してください。
+        回答は「回答：」から始めて簡潔に答えてください。
         
-        質問：\(text)
-        回答：
+        \(text)
         """
     }
     
