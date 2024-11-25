@@ -41,6 +41,15 @@ struct ChatView: View {
                 }
                 .background(.red)
                 .disabled(isAbortButtonDisabled)
+                Button {
+                    Task {
+                        engine.reset()
+                    }
+                } label: {
+                    Text("Reset")
+                }
+                .background(.yellow)
+                .disabled(isResetButtonDisabled)
             }
         }
         .frame(maxWidth: .infinity)
@@ -63,6 +72,10 @@ struct ChatView: View {
     
     private var isAbortButtonDisabled: Bool {
         !engine.isGenerating
+    }
+    
+    private var isResetButtonDisabled: Bool {
+        engine.isGenerating || engine.text.isEmpty
     }
 }
 

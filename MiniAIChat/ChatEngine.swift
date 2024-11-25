@@ -61,4 +61,9 @@ final class ChatEngine {
             print(error)
         }
     }
+    
+    func reset() {
+        self.abort()
+        text = ""
+    }
 }
