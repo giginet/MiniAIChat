@@ -26,7 +26,6 @@ final class AIEngine {
     }
     
     private func generatePrompt(text: String) -> String {
-        // https://huggingface.co/elyza/ELYZA-japanese-Llama-2-7b-instruct
         assert(configuration != nil)
         return configuration?.promptGenerator(text) ?? text
     }

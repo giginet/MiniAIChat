@@ -91,3 +91,19 @@ struct JSONWithPrefectureGrammar: Grammar {
     cjk         ::= [一-鿿]
     """##
 }
+
+struct AnswerGrammar: Grammar {
+    let bnf = ##"""
+root ::= answer
+answer ::= "回答:" message
+
+message          ::= string+ ([ \t\n] string+)*
+string ::= alnum-char | jp-char
+alnum-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) # escapes
+jp-char     ::= hiragana | katakana | punctuation | cjk
+hiragana    ::= [ぁ-ゟ]
+katakana    ::= [ァ-ヿ]
+punctuation ::= [、-〾]
+cjk         ::= [一-鿿]
+"""##
+}
