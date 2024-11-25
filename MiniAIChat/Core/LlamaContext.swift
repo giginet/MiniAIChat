@@ -1,7 +1,7 @@
 import Foundation
 import llama
 
-fileprivate struct Sampler {
+fileprivate struct LlamaSampler {
     var grammar: UnsafeMutablePointer<llama_sampler>?
     var chain: UnsafeMutablePointer<llama_sampler>
     
@@ -53,15 +53,15 @@ final class LlamaContext: AsyncSequence {
         case couldNotParsePieces(llama_token)
     }
     
-    struct Params {
+    struct Parameters {
         var bnf: String?
         var threadCount = 8
         var numberOfContext = 2048
         var numberOfBatch = 1024
         var tempature = 0.3
         
-        static var `default`: Params {
-            Params()
+        static var `default`: Parameters {
+            Parameters()
         }
     }
     
@@ -71,13 +71,11 @@ final class LlamaContext: AsyncSequence {
         fileprivate var orphans: Array<CChar> = []
         fileprivate var numberOfCursors: Int32 = 0
         fileprivate var llamaBatch: llama_batch
-        fileprivate var sampler: Sampler
+        fileprivate var sampler: LlamaSampler
     }
     private var state: GenerationState
     
-    private(set) var isGenerating = false
-    
-    convenience init(modelPath: URL, params: Params) throws {
+    convenience init(modelPath: URL, params: Parameters) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -103,7 +101,7 @@ final class LlamaContext: AsyncSequence {
         try self.init(model: model, context: context, params: params)
     }
     
-    init(model: OpaquePointer, context: OpaquePointer, params: Params) throws {
+    init(model: OpaquePointer, context: OpaquePointer, params: Parameters) throws {
         llama_backend_init()
         let samplerChainParams = llama_sampler_chain_default_params()
         let chain = llama_sampler_chain_init(samplerChainParams)
@@ -126,7 +124,7 @@ final class LlamaContext: AsyncSequence {
         
         let context = context
         
-        let sampler = Sampler(
+        let sampler = LlamaSampler(
             grammar: grammar,
             chain: chain
         )
@@ -145,13 +143,12 @@ final class LlamaContext: AsyncSequence {
         case eog
     }
     
-    func startGenerating(for prompt: String) {
+    func startGeneration(for prompt: String) {
         let tokens = tokenize(prompt, addingBOS: true)
         
         initializeBatch(&state.llamaBatch, tokens: tokens)
         
         state.numberOfCursors = state.llamaBatch.n_tokens
-        isGenerating = true
     }
     
     func clear() {
@@ -311,7 +308,7 @@ extension LlamaContext {
             return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
         }
         
-        private func accept(_ sampler: Sampler, to token: llama_token, shouldAcceptGrammar: Bool) {
+        private func accept(_ sampler: LlamaSampler, to token: llama_token, shouldAcceptGrammar: Bool) {
             if shouldAcceptGrammar && sampler.isGrammarEnabled {
                 llama_sampler_accept(sampler.grammar, token)
             }
