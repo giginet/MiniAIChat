@@ -62,6 +62,8 @@ final class LlamaContext {
     private var context: OpaquePointer
     private var sampler: Sampler
     
+    private var llamaBatch: llama_batch
+    
     convenience init(modelPath: URL, params: Params) throws {
         let modelParams = llama_model_default_params()
         
@@ -85,7 +87,6 @@ final class LlamaContext {
         guard let context else {
             throw GenerationError.failedToInitializeContext
         }
-        
         try self.init(model: model, context: context, params: params)
     }
     
@@ -116,6 +117,7 @@ final class LlamaContext {
             grammar: grammar,
             chain: chain
         )
+        llamaBatch = llama_batch_init(2048, 0, 1)
     }
     
     enum GenerationResult {
@@ -125,8 +127,6 @@ final class LlamaContext {
     
     func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, any Error> {
         let tokens = tokenize(prompt, addingBOS: true)
-        
-        var llamaBatch = llama_batch_init(2048, 0, 1)
         
         initializeBatch(&llamaBatch, tokens: tokens)
         
@@ -197,7 +197,7 @@ final class LlamaContext {
     
     deinit {
         llama_sampler_free(sampler.chain)
-//        llama_batch_free(batch)
+        llama_batch_free(llamaBatch)
         llama_free(context)
         llama_free_model(model)
         llama_backend_free()
