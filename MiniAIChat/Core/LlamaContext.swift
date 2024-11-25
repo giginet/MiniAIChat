@@ -58,16 +58,18 @@ actor LlamaContext {
         }
     }
     
+    struct GenerationState {
+        fileprivate var context: OpaquePointer
+        fileprivate var orphans: Array<CChar> = []
+        fileprivate var numberOfCursors: Int32 = 0
+        fileprivate var llamaBatch: llama_batch
+        fileprivate var sampler: Sampler
+    }
+    
     private var model: OpaquePointer
-    private var context: OpaquePointer
-    private var sampler: Sampler
+    private var state: GenerationState
     
     private(set) var isGenerating = false
-    private var numberOfCursors: Int32 = 0
-    private var orphans: Array<CChar> = []
-    
-    
-    private var llamaBatch: llama_batch
     
     init(modelPath: URL, params: Params) throws {
         let modelParams = llama_model_default_params()
@@ -98,7 +100,6 @@ actor LlamaContext {
     init(model: OpaquePointer, context: OpaquePointer, params: Params) throws {
         llama_backend_init()
         self.model = model
-        self.context = context
         let samplerChainParams = llama_sampler_chain_default_params()
         let chain = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(chain, llama_sampler_init_temp(0.3))
@@ -118,11 +119,19 @@ actor LlamaContext {
             throw GenerationError.failedToInitializeContext
         }
         
-        sampler = Sampler(
+        let context = context
+        
+        let sampler = Sampler(
             grammar: grammar,
             chain: chain
         )
-        llamaBatch = llama_batch_init(2048, 0, 1)
+        let llamaBatch = llama_batch_init(2048, 0, 1)
+        
+        state = GenerationState(
+            context: context,
+            llamaBatch: llamaBatch,
+            sampler: sampler
+        )
     }
     
     enum GenerationResult {
@@ -133,25 +142,25 @@ actor LlamaContext {
     func startGenerating(for prompt: String) {
         let tokens = tokenize(prompt, addingBOS: true)
         
-        initializeBatch(&llamaBatch, tokens: tokens)
+        initializeBatch(&state.llamaBatch, tokens: tokens)
         
-        numberOfCursors = llamaBatch.n_tokens
+        state.numberOfCursors = state.llamaBatch.n_tokens
         isGenerating = true
     }
     
     func generate() throws -> GenerationResult {
-        let contextCounts = llama_n_ctx(self.context)
-        let usedContextCounts = llama_get_kv_cache_used_cells(self.context)
-        guard usedContextCounts + llamaBatch.n_tokens <= contextCounts else {
+        let contextCounts = llama_n_ctx(self.state.context)
+        let usedContextCounts = llama_get_kv_cache_used_cells(self.state.context)
+        guard usedContextCounts + state.llamaBatch.n_tokens <= contextCounts else {
             throw GenerationError.contextSizeExceeded
         }
         
-        guard llama_decode(self.context, llamaBatch) >= 0 else {
+        guard llama_decode(self.state.context, state.llamaBatch) >= 0 else {
             throw GenerationError.decodeError
         }
         
-        let newTokenID = sampling(batch: llamaBatch, index: -1, shouldGrammarFirst: true)
-        accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
+        let newTokenID = sampling(batch: state.llamaBatch, index: -1, shouldGrammarFirst: true)
+        accept(state.sampler, to: newTokenID, shouldAcceptGrammar: true)
         
         guard !llama_token_is_eog(self.model, newTokenID) else {
             isGenerating = false
@@ -164,38 +173,38 @@ actor LlamaContext {
         } catch {
             throw GenerationError.couldNotParsePieces(newTokenID)
         }
-        orphans.append(contentsOf: validPieces)
+        state.orphans.append(contentsOf: validPieces)
         
         let newPiece: GenerationResult
-        if let validString = String(validating: orphans + [0], as: UTF8.self) {
-            orphans.removeAll()
+        if let validString = String(validating: state.orphans + [0], as: UTF8.self) {
+            state.orphans.removeAll()
             newPiece = .piece(validString)
-        } else if (0 ..< orphans.count).contains(where: {
-            $0 != 0 && String(validating: Array(orphans.suffix($0)) + [0], as: UTF8.self) != nil
+        } else if (0 ..< state.orphans.count).contains(where: {
+            $0 != 0 && String(validating: Array(state.orphans.suffix($0)) + [0], as: UTF8.self) != nil
         }) {
-            let string = String(cString: orphans + [0])
-            orphans.removeAll()
+            let string = String(cString: state.orphans + [0])
+            state.orphans.removeAll()
             newPiece = .piece(string)
         } else {
             newPiece = .piece("")
         }
         
-        llama_batch_clear(&llamaBatch)
-        llama_batch_add(&llamaBatch, newTokenID, numberOfCursors, [0], true)
+        llama_batch_clear(&state.llamaBatch)
+        llama_batch_add(&state.llamaBatch, newTokenID, state.numberOfCursors, [0], true)
         
-        numberOfCursors += 1
+        state.numberOfCursors += 1
         
         return newPiece
     }
     
     func clear() {
-        llama_kv_cache_clear(context)
+        llama_kv_cache_clear(state.context)
     }
     
     deinit {
-        llama_sampler_free(sampler.chain)
-        llama_batch_free(llamaBatch)
-        llama_free(context)
+        llama_sampler_free(state.sampler.chain)
+        llama_batch_free(state.llamaBatch)
+        llama_free(state.context)
         llama_free_model(model)
         llama_backend_free()
     }
@@ -240,22 +249,22 @@ actor LlamaContext {
     
     // common_sampler_sample
     private func sampling(batch: llama_batch, index: Int, shouldGrammarFirst: Bool) -> llama_token {
-        sampler.updateLogits(context: self.context, index: index)
+        state.sampler.updateLogits(context: self.state.context, index: index)
         
-        assert(sampler.cursorPointer != nil)
-        let cursorRawPointer = withUnsafeMutablePointer(to: &sampler.cursorPointer!) { $0 }
+        assert(state.sampler.cursorPointer != nil)
+        let cursorRawPointer = withUnsafeMutablePointer(to: &state.sampler.cursorPointer!) { $0 }
         
-        if shouldGrammarFirst && sampler.isGrammarEnabled {
-            llama_sampler_apply(sampler.grammar, cursorRawPointer)
+        if shouldGrammarFirst && state.sampler.isGrammarEnabled {
+            llama_sampler_apply(state.sampler.grammar, cursorRawPointer)
         }
-        llama_sampler_apply(sampler.chain, cursorRawPointer)
+        llama_sampler_apply(state.sampler.chain, cursorRawPointer)
         
-        let selected = sampler.cursorPointer?.selected ?? -1
-        assert(sampler.cursorPointer?.selected != -1)
+        let selected = state.sampler.cursorPointer?.selected ?? -1
+        assert(state.sampler.cursorPointer?.selected != -1)
         
         let id = cursorRawPointer.pointee.data[Int(selected)].id
         
-        if (shouldGrammarFirst && sampler.isGrammarEnabled) {
+        if (shouldGrammarFirst && state.sampler.isGrammarEnabled) {
             return id
         }
         
@@ -267,9 +276,9 @@ actor LlamaContext {
             selected: -1,
             sorted: false
         )
-        if sampler.isGrammarEnabled {
+        if state.sampler.isGrammarEnabled {
             withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
-                llama_sampler_apply(self.sampler.grammar, pointer)
+                llama_sampler_apply(self.state.sampler.grammar, pointer)
             }
         }
         let isValid = cursorRawPointer.pointee.data[0].logit != -1 * .infinity
@@ -277,11 +286,11 @@ actor LlamaContext {
             return id
         }
         
-        sampler.updateLogits(context: context, index: index)
-        if sampler.isGrammarEnabled {
-            llama_sampler_apply(self.sampler.grammar, cursorRawPointer)
+        state.sampler.updateLogits(context: state.context, index: index)
+        if state.sampler.isGrammarEnabled {
+            llama_sampler_apply(self.state.sampler.grammar, cursorRawPointer)
         }
-        llama_sampler_apply(self.sampler.chain, cursorRawPointer)
+        llama_sampler_apply(self.state.sampler.chain, cursorRawPointer)
         assert(cursorRawPointer.pointee.selected != -1)
         return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
     }
