@@ -2,7 +2,7 @@ import Foundation
 
 @Observable
 @MainActor
-final class AIEngine {
+final class ChatEngine {
     private(set) var text: String = ""
     private(set) var isInitialized = false
     @ObservationIgnored private var configuration: Configuration?

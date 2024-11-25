@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct ChatView: View {
-    private let engine: AIEngine = AIEngine()
+    private let engine: ChatEngine = ChatEngine()
     @Environment(\.configuration) var configuration
     @State var input: String = ""
     
