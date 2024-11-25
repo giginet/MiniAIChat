@@ -34,11 +34,10 @@ final class ChatEngine {
         guard let llamaContext else { return }
         let prompt = generatePrompt(text: text)
         
-        await llamaContext.startGenerating(for: prompt)
+        llamaContext.startGenerating(for: prompt)
         
         generatingTask = Task {
-            while await llamaContext.isGenerating {
-                let result = try await llamaContext.generate()
+            for try await result in llamaContext {
                 guard case .piece(let newPiece) = result else {
                     break
                 }
@@ -47,7 +46,7 @@ final class ChatEngine {
                 }
             }
             
-            await llamaContext.clear()
+            llamaContext.clear()
         }
     }
     
@@ -55,7 +54,7 @@ final class ChatEngine {
         do {
             generatingTask?.cancel()
             generatingTask = nil
-            await llamaContext?.clear()
+            llamaContext?.clear()
             guard let configuration else { fatalError() }
             try self.initialize(configuration: configuration)
         } catch {

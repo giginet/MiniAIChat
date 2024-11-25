@@ -35,7 +35,14 @@ fileprivate struct Sampler {
      }
 }
 
-actor LlamaContext {
+final class LlamaContext: AsyncSequence {
+    typealias AsyncIterator = LlamaTokenGenerator
+    typealias Element = GenerationResult
+    
+    func makeAsyncIterator() -> LlamaTokenGenerator {
+        LlamaTokenGenerator(state: state)
+    }
+    
     enum GenerationError: Error {
         case unableToLoadModel(URL)
         case failedToInitializeContext
@@ -60,18 +67,17 @@ actor LlamaContext {
     
     struct GenerationState {
         fileprivate var context: OpaquePointer
+        fileprivate var model: OpaquePointer
         fileprivate var orphans: Array<CChar> = []
         fileprivate var numberOfCursors: Int32 = 0
         fileprivate var llamaBatch: llama_batch
         fileprivate var sampler: Sampler
     }
-    
-    private var model: OpaquePointer
     private var state: GenerationState
     
     private(set) var isGenerating = false
     
-    init(modelPath: URL, params: Params) throws {
+    convenience init(modelPath: URL, params: Params) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
@@ -99,7 +105,6 @@ actor LlamaContext {
     
     init(model: OpaquePointer, context: OpaquePointer, params: Params) throws {
         llama_backend_init()
-        self.model = model
         let samplerChainParams = llama_sampler_chain_default_params()
         let chain = llama_sampler_chain_init(samplerChainParams)
         llama_sampler_chain_add(chain, llama_sampler_init_temp(0.3))
@@ -109,7 +114,7 @@ actor LlamaContext {
         
         let grammar: UnsafeMutablePointer<llama_sampler>?
         if let bnf = params.bnf {
-            grammar = llama_sampler_init_grammar(self.model, bnf, "root")
+            grammar = llama_sampler_init_grammar(model, bnf, "root")
             llama_sampler_chain_add(chain, grammar)
         } else {
             grammar = nil
@@ -129,6 +134,7 @@ actor LlamaContext {
         
         state = GenerationState(
             context: context,
+            model: model,
             llamaBatch: llamaBatch,
             sampler: sampler
         )
@@ -148,55 +154,6 @@ actor LlamaContext {
         isGenerating = true
     }
     
-    func generate() throws -> GenerationResult {
-        let contextCounts = llama_n_ctx(self.state.context)
-        let usedContextCounts = llama_get_kv_cache_used_cells(self.state.context)
-        guard usedContextCounts + state.llamaBatch.n_tokens <= contextCounts else {
-            throw GenerationError.contextSizeExceeded
-        }
-        
-        guard llama_decode(self.state.context, state.llamaBatch) >= 0 else {
-            throw GenerationError.decodeError
-        }
-        
-        let newTokenID = sampling(batch: state.llamaBatch, index: -1, shouldGrammarFirst: true)
-        accept(state.sampler, to: newTokenID, shouldAcceptGrammar: true)
-        
-        guard !llama_token_is_eog(self.model, newTokenID) else {
-            isGenerating = false
-            return .eog
-        }
-        
-        let validPieces: [CChar]
-        do {
-            validPieces = try pieces(from: newTokenID)
-        } catch {
-            throw GenerationError.couldNotParsePieces(newTokenID)
-        }
-        state.orphans.append(contentsOf: validPieces)
-        
-        let newPiece: GenerationResult
-        if let validString = String(validating: state.orphans + [0], as: UTF8.self) {
-            state.orphans.removeAll()
-            newPiece = .piece(validString)
-        } else if (0 ..< state.orphans.count).contains(where: {
-            $0 != 0 && String(validating: Array(state.orphans.suffix($0)) + [0], as: UTF8.self) != nil
-        }) {
-            let string = String(cString: state.orphans + [0])
-            state.orphans.removeAll()
-            newPiece = .piece(string)
-        } else {
-            newPiece = .piece("")
-        }
-        
-        llama_batch_clear(&state.llamaBatch)
-        llama_batch_add(&state.llamaBatch, newTokenID, state.numberOfCursors, [0], true)
-        
-        state.numberOfCursors += 1
-        
-        return newPiece
-    }
-    
     func clear() {
         llama_kv_cache_clear(state.context)
     }
@@ -205,7 +162,7 @@ actor LlamaContext {
         llama_sampler_free(state.sampler.chain)
         llama_batch_free(state.llamaBatch)
         llama_free(state.context)
-        llama_free_model(model)
+        llama_free_model(state.model)
         llama_backend_free()
     }
     
@@ -215,27 +172,11 @@ actor LlamaContext {
         let tokens = UnsafeMutableBufferPointer<llama_token>.allocate(capacity: numberOfTokens)
         tokens.initialize(repeating: llama_token())
         defer { tokens.deallocate() }
-        let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens.baseAddress!, Int32(numberOfTokens), addingBOS, false)
+        let tokenCount = llama_tokenize(state.model, text, Int32(utf8Count), tokens.baseAddress!, Int32(numberOfTokens), addingBOS, false)
 
         return (0..<tokenCount).map { i in
             tokens[Int(i)]
         }
-    }
-    
-    private func pieces(from token: llama_token) throws(GenerationError) -> [CChar] {
-        let maxTokenCount = 128
-        let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenCount)
-        pieceBuffer.initialize(repeating: CChar())
-        defer { pieceBuffer.deallocate() }
-        
-        let numberOfTokens = llama_token_to_piece(model, token, pieceBuffer.baseAddress!, Int32(maxTokenCount), 0, false)
-        
-        guard numberOfTokens >= 0 else {
-            throw GenerationError.tokenizeFailed
-        }
-        
-        let bufferPointer = UnsafeBufferPointer(start: pieceBuffer.baseAddress, count: Int(numberOfTokens))
-        return Array(bufferPointer)
     }
     
     private func initializeBatch(_ batch: inout llama_batch, tokens: [llama_token]) {
@@ -246,61 +187,137 @@ actor LlamaContext {
         }
         batch.logits[Int(batch.n_tokens) - 1] = 1 // true
     }
-    
-    // common_sampler_sample
-    private func sampling(batch: llama_batch, index: Int, shouldGrammarFirst: Bool) -> llama_token {
-        state.sampler.updateLogits(context: self.state.context, index: index)
+}
+
+extension LlamaContext {
+    final class LlamaTokenGenerator: AsyncIteratorProtocol {
+        typealias Element = GenerationResult
         
-        assert(state.sampler.cursorPointer != nil)
-        let cursorRawPointer = withUnsafeMutablePointer(to: &state.sampler.cursorPointer!) { $0 }
+        private var state: GenerationState
         
-        if shouldGrammarFirst && state.sampler.isGrammarEnabled {
-            llama_sampler_apply(state.sampler.grammar, cursorRawPointer)
-        }
-        llama_sampler_apply(state.sampler.chain, cursorRawPointer)
-        
-        let selected = state.sampler.cursorPointer?.selected ?? -1
-        assert(state.sampler.cursorPointer?.selected != -1)
-        
-        let id = cursorRawPointer.pointee.data[Int(selected)].id
-        
-        if (shouldGrammarFirst && state.sampler.isGrammarEnabled) {
-            return id
+        init(state: GenerationState) {
+            self.state = state
         }
         
-        // check if it the sampled token fits the grammar
-        var singleTokenData = llama_token_data(id: id, logit: 1, p: 0)
-        var singleTokenDataArray = llama_token_data_array(
-            data: withUnsafeMutablePointer(to: &singleTokenData) { $0 },
-            size: 1,
-            selected: -1,
-            sorted: false
-        )
-        if state.sampler.isGrammarEnabled {
-            withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
-                llama_sampler_apply(self.state.sampler.grammar, pointer)
+        func next() async throws -> GenerationResult? {
+            let contextCounts = llama_n_ctx(self.state.context)
+            let usedContextCounts = llama_get_kv_cache_used_cells(self.state.context)
+            guard usedContextCounts + state.llamaBatch.n_tokens <= contextCounts else {
+                throw GenerationError.contextSizeExceeded
             }
-        }
-        let isValid = cursorRawPointer.pointee.data[0].logit != -1 * .infinity
-        if isValid {
-            return id
+            
+            guard llama_decode(self.state.context, state.llamaBatch) >= 0 else {
+                throw GenerationError.decodeError
+            }
+            
+            let newTokenID = sampling(batch: state.llamaBatch, index: -1, shouldGrammarFirst: true)
+            accept(state.sampler, to: newTokenID, shouldAcceptGrammar: true)
+            
+            guard !llama_token_is_eog(state.model, newTokenID) else {
+                return nil
+            }
+            
+            let validPieces: [CChar]
+            do {
+                validPieces = try pieces(from: newTokenID)
+            } catch {
+                throw GenerationError.couldNotParsePieces(newTokenID)
+            }
+            state.orphans.append(contentsOf: validPieces)
+            
+            let newPiece: GenerationResult
+            if let validString = String(validating: state.orphans + [0], as: UTF8.self) {
+                state.orphans.removeAll()
+                newPiece = .piece(validString)
+            } else if (0 ..< state.orphans.count).contains(where: {
+                $0 != 0 && String(validating: Array(state.orphans.suffix($0)) + [0], as: UTF8.self) != nil
+            }) {
+                let string = String(cString: state.orphans + [0])
+                state.orphans.removeAll()
+                newPiece = .piece(string)
+            } else {
+                newPiece = .piece("")
+            }
+            
+            llama_batch_clear(&state.llamaBatch)
+            llama_batch_add(&state.llamaBatch, newTokenID, state.numberOfCursors, [0], true)
+            
+            state.numberOfCursors += 1
+            
+            return newPiece
         }
         
-        state.sampler.updateLogits(context: state.context, index: index)
-        if state.sampler.isGrammarEnabled {
-            llama_sampler_apply(self.state.sampler.grammar, cursorRawPointer)
-        }
-        llama_sampler_apply(self.state.sampler.chain, cursorRawPointer)
-        assert(cursorRawPointer.pointee.selected != -1)
-        return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
-    }
-    
-    private func accept(_ sampler: Sampler, to token: llama_token, shouldAcceptGrammar: Bool) {
-        if shouldAcceptGrammar && sampler.isGrammarEnabled {
-            llama_sampler_accept(sampler.grammar, token)
+        private func pieces(from token: llama_token) throws(GenerationError) -> [CChar] {
+            let maxTokenCount = 128
+            let pieceBuffer = UnsafeMutableBufferPointer<CChar>.allocate(capacity: maxTokenCount)
+            pieceBuffer.initialize(repeating: CChar())
+            defer { pieceBuffer.deallocate() }
+            
+            let numberOfTokens = llama_token_to_piece(state.model, token, pieceBuffer.baseAddress!, Int32(maxTokenCount), 0, false)
+            
+            guard numberOfTokens >= 0 else {
+                throw GenerationError.tokenizeFailed
+            }
+            
+            let bufferPointer = UnsafeBufferPointer(start: pieceBuffer.baseAddress, count: Int(numberOfTokens))
+            return Array(bufferPointer)
         }
         
-//        llama_sampler_accept(sampler.chain, token)
+        // common_sampler_sample
+        private func sampling(batch: llama_batch, index: Int, shouldGrammarFirst: Bool) -> llama_token {
+            state.sampler.updateLogits(context: self.state.context, index: index)
+            
+            assert(state.sampler.cursorPointer != nil)
+            let cursorRawPointer = withUnsafeMutablePointer(to: &state.sampler.cursorPointer!) { $0 }
+            
+            if shouldGrammarFirst && state.sampler.isGrammarEnabled {
+                llama_sampler_apply(state.sampler.grammar, cursorRawPointer)
+            }
+            llama_sampler_apply(state.sampler.chain, cursorRawPointer)
+            
+            let selected = state.sampler.cursorPointer?.selected ?? -1
+            assert(state.sampler.cursorPointer?.selected != -1)
+            
+            let id = cursorRawPointer.pointee.data[Int(selected)].id
+            
+            if (shouldGrammarFirst && state.sampler.isGrammarEnabled) {
+                return id
+            }
+            
+            // check if it the sampled token fits the grammar
+            var singleTokenData = llama_token_data(id: id, logit: 1, p: 0)
+            var singleTokenDataArray = llama_token_data_array(
+                data: withUnsafeMutablePointer(to: &singleTokenData) { $0 },
+                size: 1,
+                selected: -1,
+                sorted: false
+            )
+            if state.sampler.isGrammarEnabled {
+                withUnsafeMutablePointer(to: &singleTokenDataArray) { pointer in
+                    llama_sampler_apply(self.state.sampler.grammar, pointer)
+                }
+            }
+            let isValid = cursorRawPointer.pointee.data[0].logit != -1 * .infinity
+            if isValid {
+                return id
+            }
+            
+            state.sampler.updateLogits(context: state.context, index: index)
+            if state.sampler.isGrammarEnabled {
+                llama_sampler_apply(self.state.sampler.grammar, cursorRawPointer)
+            }
+            llama_sampler_apply(self.state.sampler.chain, cursorRawPointer)
+            assert(cursorRawPointer.pointee.selected != -1)
+            return cursorRawPointer.pointee.data[Int(cursorRawPointer.pointee.selected)].id
+        }
+        
+        private func accept(_ sampler: Sampler, to token: llama_token, shouldAcceptGrammar: Bool) {
+            if shouldAcceptGrammar && sampler.isGrammarEnabled {
+                llama_sampler_accept(sampler.grammar, token)
+            }
+            
+            //        llama_sampler_accept(sampler.chain, token)
+        }
     }
 }
 
