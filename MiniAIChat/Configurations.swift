@@ -3,14 +3,14 @@ import SwiftUI
 struct Configuration: Sendable {
     var modelName: String
     var grammar: (any Grammar)?
-    var tempature: Float
+    var tempature: Double
     var defaultPrompt: String
     var promptGenerator: @Sendable (String) -> String = { $0 }
 }
 
 extension Configuration {
     static let `default`: Self = .init(
-        modelName: "ELYZA-japanese-Llama-2-7b-instruct-q5_K_M",
+        modelName: "Llama-3-ELYZA-JP-8B-q4_k_m",
         grammar: AnswerGrammar(),
         tempature: 0.5,
         defaultPrompt: "古代ギリシャを学ぶ上で知っておくべきポイントは？"
@@ -25,10 +25,10 @@ extension Configuration {
     }
     
     static let japanesePrefecture: Self = .init(
-        modelName: "ELYZA-japanese-Llama-2-7b-instruct-q5_K_M",
+        modelName: "Llama-3-ELYZA-JP-8B-q4_k_m",
         grammar: JSONWithPrefectureGrammar(),
         tempature: 0.1,
-        defaultPrompt: "47個全ての日本の都道府県とその県庁所在地を出力してください。結果はprefectureとcapitalをキーに持つ配列で出力してください。"
+        defaultPrompt: "全ての日本の都道府県とその県庁所在地をJSONで出力してください。prefectureとcapitalをキーに持ってください"
     ) { text in
         """
         あなたは誠実で優秀な日本人のアシスタントです。

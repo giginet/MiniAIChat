@@ -57,7 +57,7 @@ final class LlamaContext: AsyncSequence {
         var bnf: String?
         var threadCount = 8
         var numberOfContext = 2048
-        var numberOfBatch = 1024
+        var numberOfBatch = 4096
         var tempature = 0.3
         
         static var `default`: Parameters {
@@ -105,7 +105,7 @@ final class LlamaContext: AsyncSequence {
         llama_backend_init()
         let samplerChainParams = llama_sampler_chain_default_params()
         let chain = llama_sampler_chain_init(samplerChainParams)
-        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.3))
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(Float(params.tempature)))
         llama_sampler_chain_add(chain, llama_sampler_init_dist(0xFFFFFFFF))
         llama_sampler_chain_add(chain, llama_sampler_init_top_p(0.95, 2))
         llama_sampler_chain_add(chain, llama_sampler_init_min_p(0.05, 1))
@@ -128,7 +128,7 @@ final class LlamaContext: AsyncSequence {
             grammar: grammar,
             chain: chain
         )
-        let llamaBatch = llama_batch_init(2048, 0, 1)
+        let llamaBatch = llama_batch_init(Int32(params.numberOfBatch), 0, 1)
         
         state = GenerationState(
             context: context,
@@ -223,13 +223,13 @@ extension LlamaContext {
             state.orphans.append(contentsOf: validPieces)
             
             let newPiece: GenerationResult
-            if let validString = String(validating: state.orphans + [0], as: UTF8.self) {
+            if let validString = String(validating: state.orphans , as: UTF8.self) {
                 state.orphans.removeAll()
                 newPiece = .piece(validString)
-            } else if (0 ..< state.orphans.count).contains(where: {
-                $0 != 0 && String(validating: Array(state.orphans.suffix($0)) + [0], as: UTF8.self) != nil
+            } else if (1 ..< state.orphans.count).contains(where: {
+                String(validating: Array(state.orphans.suffix($0)), as: UTF8.self) != nil
             }) {
-                let string = String(cString: state.orphans + [0])
+                let string = String(cString: state.orphans)
                 state.orphans.removeAll()
                 newPiece = .piece(string)
             } else {

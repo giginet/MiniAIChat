@@ -73,7 +73,7 @@ struct JSONWithPrefectureGrammar: Grammar {
     string ::=
       "\"" (string-char)* "\""
 
-    string-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) | jp-char # escapes
+    string-char ::= [^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]) # escapes
 
     number ::= integer ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
     integer ::= "-"? ([0-9] | [1-9] [0-9]*)
@@ -83,12 +83,6 @@ struct JSONWithPrefectureGrammar: Grammar {
     # Optional space: by convention, applied in this grammar after literal chars when allowed
     ws ::= ([ \t\n] ws)?
     ws01 ::= ([ \t\n])?
-
-    jp-char     ::= hiragana | katakana | punctuation | cjk
-    hiragana    ::= [ぁ-ゟ]
-    katakana    ::= [ァ-ヿ]
-    punctuation ::= [、-〾]
-    cjk         ::= [一-鿿]
     """##
 }
 

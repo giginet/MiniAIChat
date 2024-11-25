@@ -55,6 +55,7 @@ struct ChatView: View {
         .frame(maxWidth: .infinity)
         .onAppear {
             input = configuration.defaultPrompt
+            engine.tempature = configuration.tempature
         }
         .task {
             do {

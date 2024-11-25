@@ -5,6 +5,7 @@ import Foundation
 final class ChatEngine {
     private(set) var text: String = ""
     private(set) var isInitialized = false
+    var tempature: Double = 0.3
     @ObservationIgnored private var configuration: Configuration?
     @ObservationIgnored private var llamaContext: LlamaContext?
     
@@ -21,7 +22,7 @@ final class ChatEngine {
         }
         
         let grammar = configuration.grammar
-        llamaContext = try LlamaContext(modelPath: modelPath, params: .init(bnf: grammar?.bnf))
+        llamaContext = try LlamaContext(modelPath: modelPath, params: .init(bnf: grammar?.bnf, tempature: tempature))
         isInitialized = true
     }
     
