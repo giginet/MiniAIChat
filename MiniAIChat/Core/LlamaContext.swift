@@ -130,13 +130,16 @@ final class LlamaContext {
         case eog
     }
     
-    func generate(for prompt: String) throws -> AsyncThrowingStream<GenerationResult, any Error> {
+    func startGenerating(for prompt: String) {
         let tokens = tokenize(prompt, addingBOS: true)
         
         initializeBatch(&llamaBatch, tokens: tokens)
         
         numberOfCursors = llamaBatch.n_tokens
-        
+        isGenerating = true
+    }
+    
+    func generate() throws -> AsyncThrowingStream<GenerationResult, any Error> {
         return AsyncThrowingStream<GenerationResult, any Error> { [weak self] continuation in
             Task {
                 guard let self else { return }
@@ -158,6 +161,7 @@ final class LlamaContext {
                     accept(sampler, to: newTokenID, shouldAcceptGrammar: true)
                     
                     guard !llama_token_is_eog(self.model, newTokenID) else {
+                        isGenerating = false
                         continuation.finish()
                         break
                     }
