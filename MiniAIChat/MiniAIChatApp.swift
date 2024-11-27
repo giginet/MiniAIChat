@@ -11,8 +11,18 @@ import SwiftUI
 struct MiniAIChatApp: App {
     var body: some Scene {
         WindowGroup {
-            ChatView()
-                .environment(\.configuration, .default)
+            TabView {
+                ChatView()
+                    .tabItem {
+                        Label("General Question", systemImage: "1.circle")
+                    }
+                    .environment(\.configuration, .default)
+                ChatView()
+                    .tabItem {
+                        Label("Japanese Prefecture", systemImage: "1.circle")
+                    }
+                    .environment(\.configuration, .japanesePrefecture)
+            }
         }
     }
 }
