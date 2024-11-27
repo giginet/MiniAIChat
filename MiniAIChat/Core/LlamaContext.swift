@@ -223,13 +223,13 @@ extension LlamaContext {
             state.orphans.append(contentsOf: validPieces)
             
             let newPiece: GenerationResult
-            if let validString = String(validatingUTF8: state.orphans) {
+            if let validString = String(validatingUTF8: state.orphans + [0]) {
                 state.orphans.removeAll()
                 newPiece = .piece(validString)
             } else if (1 ..< state.orphans.count).contains(where: {
-                String(validatingUTF8: Array(state.orphans.suffix($0))) != nil
+                String(validatingUTF8: Array(state.orphans.suffix($0) + [0])) != nil
             }) {
-                let string = String(cString: state.orphans)
+                let string = String(cString: state.orphans + [0])
                 state.orphans.removeAll()
                 newPiece = .piece(string)
             } else {
