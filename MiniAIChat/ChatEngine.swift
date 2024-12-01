@@ -35,10 +35,10 @@ final class ChatEngine {
         guard let llamaContext else { return }
         let prompt = generatePrompt(text: text)
         
-        llamaContext.startGeneration(for: prompt)
+        let session = llamaContext.startGeneration(for: prompt)
         
         generatingTask = Task {
-            for try await result in llamaContext {
+            for try await result in session {
                 guard !Task.isCancelled else { break }
                 guard case .piece(let newPiece) = result else {
                     break

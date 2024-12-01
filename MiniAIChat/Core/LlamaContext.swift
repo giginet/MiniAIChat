@@ -35,24 +35,35 @@ fileprivate struct LlamaSampler {
      }
 }
 
-final class LlamaContext: AsyncSequence {
-    typealias AsyncIterator = LlamaTokenGenerator
+final class LlamaGenerationSession: AsyncSequence {
+    typealias AsyncIterator = TokenIterator
     typealias Element = GenerationResult
     
-    func makeAsyncIterator() -> LlamaTokenGenerator {
-        LlamaTokenGenerator(state: state)
+    init(state: LlamaGenerationSession.State) {
+        self.state = state
     }
     
-    enum GenerationError: Error {
-        case unableToLoadModel(URL)
-        case failedToInitializeContext
-        case tokenizeFailed
-        case contextSizeExceeded
-        case decodeError
-        case failedToConvert
-        case couldNotParsePieces(llama_token)
+    func makeAsyncIterator() -> TokenIterator {
+        TokenIterator(state: state)
+    }
+    private var state: LlamaGenerationSession.State
+    
+    struct State {
+        fileprivate var context: OpaquePointer
+        fileprivate var model: OpaquePointer
+        fileprivate var orphans: Array<CChar> = []
+        fileprivate var numberOfCursors: Int32 = 0
+        fileprivate var llamaBatch: llama_batch
+        fileprivate var sampler: LlamaSampler
     }
     
+    enum GenerationResult {
+        case piece(String)
+        case eog
+    }
+}
+
+final class LlamaContext {
     struct Parameters {
         var bnf: String?
         var threadCount = 8
@@ -64,23 +75,14 @@ final class LlamaContext: AsyncSequence {
             Parameters()
         }
     }
-    
-    struct GenerationState {
-        fileprivate var context: OpaquePointer
-        fileprivate var model: OpaquePointer
-        fileprivate var orphans: Array<CChar> = []
-        fileprivate var numberOfCursors: Int32 = 0
-        fileprivate var llamaBatch: llama_batch
-        fileprivate var sampler: LlamaSampler
-    }
-    private var state: GenerationState
+    private var state: LlamaGenerationSession.State
     
     convenience init(modelPath: URL, params: Parameters) throws {
         let modelParams = llama_model_default_params()
         
         let model = llama_load_model_from_file(modelPath.path(), modelParams)
         guard let model else {
-            throw GenerationError.unableToLoadModel(modelPath)
+            throw ContextError.unableToLoadModel(modelPath)
         }
         
         let threadCount = params.threadCount
@@ -96,7 +98,7 @@ final class LlamaContext: AsyncSequence {
         
         let context = llama_new_context_with_model(model, contextParams)
         guard let context else {
-            throw GenerationError.failedToInitializeContext
+            throw ContextError.failedToInitializeContext
         }
         try self.init(model: model, context: context, params: params)
     }
@@ -119,7 +121,7 @@ final class LlamaContext: AsyncSequence {
         }
         
         guard let chain else {
-            throw GenerationError.failedToInitializeContext
+            throw ContextError.failedToInitializeContext
         }
         
         let context = context
@@ -130,7 +132,7 @@ final class LlamaContext: AsyncSequence {
         )
         let llamaBatch = llama_batch_init(Int32(params.numberOfBatch), 0, 1)
         
-        state = GenerationState(
+        state = LlamaGenerationSession.State(
             context: context,
             model: model,
             llamaBatch: llamaBatch,
@@ -138,17 +140,14 @@ final class LlamaContext: AsyncSequence {
         )
     }
     
-    enum GenerationResult {
-        case piece(String)
-        case eog
-    }
-    
-    func startGeneration(for prompt: String) {
+    func startGeneration(for prompt: String) -> LlamaGenerationSession {
         let tokens = tokenize(prompt, addingBOS: true)
         
         initializeBatch(&state.llamaBatch, tokens: tokens)
         
         state.numberOfCursors = state.llamaBatch.n_tokens
+        
+        return LlamaGenerationSession(state: state)
     }
     
     func clear() {
@@ -184,15 +183,20 @@ final class LlamaContext: AsyncSequence {
         }
         batch.logits[Int(batch.n_tokens) - 1] = 1 // true
     }
+    
+    enum ContextError: Error {
+        case unableToLoadModel(URL)
+        case failedToInitializeContext
+    }
 }
 
-extension LlamaContext {
-    final class LlamaTokenGenerator: AsyncIteratorProtocol {
+extension LlamaGenerationSession {
+    final class TokenIterator: AsyncIteratorProtocol {
         typealias Element = GenerationResult
         
-        private var state: GenerationState
+        private var state: LlamaGenerationSession.State
         
-        init(state: GenerationState) {
+        init(state: LlamaGenerationSession.State) {
             self.state = state
         }
         
@@ -314,6 +318,14 @@ extension LlamaContext {
             
             //        llama_sampler_accept(sampler.chain, token)
         }
+    }
+    
+    enum GenerationError: Error {
+        case tokenizeFailed
+        case contextSizeExceeded
+        case decodeError
+        case failedToConvert
+        case couldNotParsePieces(llama_token)
     }
 }
 
