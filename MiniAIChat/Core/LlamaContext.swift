@@ -223,13 +223,12 @@ extension LlamaContext {
             state.orphans.append(contentsOf: validPieces)
             
             let newPiece: GenerationResult
-            if let validString = String(validatingUTF8: state.orphans + [0]) {
+            if let validString = String(validating: state.orphans) {
                 state.orphans.removeAll()
                 newPiece = .piece(validString)
             } else if (1 ..< state.orphans.count).contains(where: {
-                String(validatingUTF8: Array(state.orphans.suffix($0) + [0])) != nil
-            }) {
-                let string = String(cString: state.orphans + [0])
+                String(validating: Array(state.orphans.suffix($0))) != nil
+            }), let string = String(validating: state.orphans) {
                 state.orphans.removeAll()
                 newPiece = .piece(string)
             } else {
@@ -332,4 +331,17 @@ private func llama_batch_add(_ batch: inout llama_batch, _ id: llama_token, _ po
 
 private func llama_batch_clear(_ batch: inout llama_batch) {
     batch.n_tokens = 0
+}
+
+extension String {
+    fileprivate init?(validating notNullTerminatedChars: [CChar]) {
+        if #available(macOS 15.0, *) {
+            // The new API doesn't require null terminated sequences
+            self.init(validating: notNullTerminatedChars, as: UTF8.self)
+        } else {
+            // It requires null terminated
+            // https://developer.apple.com/documentation/swift/string
+            self.init(validatingUTF8: notNullTerminatedChars + [0])
+        }
+    }
 }
