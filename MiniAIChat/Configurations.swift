@@ -10,7 +10,7 @@ struct Configuration: Sendable {
 
 extension Configuration {
     static let `default`: Self = .init(
-        modelName: "ELYZA-japanese-Llama-2-7b-instruct-q2_K",
+        modelName: "Llama-3-ELYZA-JP-8B-q4_k_m",
         grammar: AnswerGrammar(),
         tempature: 0.5,
         defaultPrompt: "古代ギリシャを学ぶ上で知っておくべきポイントは？"
@@ -25,7 +25,7 @@ extension Configuration {
     }
     
     static let japanesePrefecture: Self = .init(
-        modelName: "ELYZA-japanese-Llama-2-7b-instruct-q2_K",
+        modelName: "Llama-3-ELYZA-JP-8B-q4_k_m",
         grammar: JSONWithPrefectureGrammar(),
         tempature: 0.1,
         defaultPrompt: "全ての日本の都道府県とその県庁所在地をJSONで出力してください。prefectureとcapitalをキーに持ってください"
